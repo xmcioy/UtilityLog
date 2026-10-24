@@ -1,6 +1,6 @@
 # UtilityLog API 文档（API.md）
 
-> 版本：0.5.1（2026-10-24）
+> 版本：0.5.2（2026-10-25）
 > 基准实现：`auth_server.py`（认证网关，`ThreadingHTTPServer`，默认监听 `127.0.0.1:8099`）。
 > 本地访问经 nginx `:8089` 反代到 `:8099`；公网经 Cloudflare Tunnel 暴露。
 > 本文档与代码同步维护；路由或参数变更时必须同步更新。
@@ -37,6 +37,7 @@
 | POST | `/logout` | 无需（读取 Cookie） | 吊销 token、清除 Cookie，302 到 `/login.html` |
 | POST | `/mcp` | 必须 | MCP Streamable HTTP 端点（JSON-RPC 2.0）。鉴权同上；推荐 `Authorization: Bearer <API Key>`。与前端共用 nginx `:8089` 端口 |
 | POST | `/api/bills/upload` | 必须 | 上传账单文件（multipart/form-data），自动解析出草稿（**不落库**），见 4.7 |
+| POST | `/api/families` | 必须 | 新建家庭（JSON `{name}`），重复名称返回 400，见 4.9 |
 | POST | `/api/bills` | 必须 | 账单确认入库（JSON，add_bill 兼容字段，upsert），见 4.8；同时服务手工录入 |
 | GET | `/data.js` | 必须 | 按当前登录用户动态导出数据（`window.UTILITY_DATA = {...};`） |
 | GET | `/api/me` | 必须 | 当前登录用户信息 |
@@ -290,6 +291,16 @@ curl -b cookies.txt -X POST http://127.0.0.1:8089/api/bills \
 
 成功：`{"ok": true, "message": "已保存", "bill": {"saved": true, "id": 1, …}}`；
 失败：400 + `{"ok": false, "error": "原因"}`（家庭不存在/无权限/参数缺失等）。
+
+### 4.9 POST /api/families（0.5.2 网页新建家庭）
+
+JSON body `{"name": "家庭名"}`，为当前登录用户创建家庭（创建者自动成为 owner）。
+重复名称返回 400。上传弹窗里「＋ 新建家庭…」即调用此接口。
+
+```bash
+curl -b cookies.txt -X POST http://127.0.0.1:8089/api/families \
+  -H "Content-Type: application/json" -d '{"name":"我的家"}'
+```
 
 ## 5. 错误响应汇总
 

@@ -4,6 +4,33 @@ All notable changes to this project will be documented in this file.
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.5.2] - 2026-10-25
+
+### 变更
+- **2026-10-25 07:35 · workbuddy** — 0.5.2：上传入口移到首页弹窗（含新建家庭），POST /api/families；修复 nginx client_max_body_size 挡大 PDF 与迁移遇孤儿家庭失败；部署验证增大body探测（文件：auth_server.py site/index.html site/settings.html db/migrations/migrate_family_share.py scripts/deploy.sh scripts/deploy.py docs/API.md docs/INSTALL.md docs/TESTING.md docs/DESIGN.md README.md README.zh-CN.md CHANGELOG.md）
+- **上传入口移到看板首页**：头部新增「＋ 上传账单」按钮 + 弹窗（上传/识别/核对/入库全流程），
+  设置页的上传卡片移除（设置页只保留 API Key / 密码 / 家庭共享）
+- **上传时可直接新建家庭**：家庭下拉选「＋ 新建家庭…」即可输入名称创建，
+  无需先去设置页/CLI 建家庭
+
+### 新增
+- `POST /api/families`（JSON `{name}`）：网页端新建家庭，重复名称返回 400；
+  首页上传流程与将来其他页面共用
+
+### 测试
+- 上传识别专项 e2e 扩充到 16 项：新增家庭创建、重复名 400、空名 400、未登录 401 断言
+- 真机抽测发现并修复两个问题（见下）
+
+### 修复
+- **nginx 默认 `client_max_body_size` 1MB 挡住大账单 PDF**：2MB+ 的 PDF 上传在 nginx 层
+  直接 413（应用层的 20MB 限制根本轮不到）。反代配置需加 `client_max_body_size 25m`；
+  部署验证新增「2MB 大 body 未鉴权 POST /mcp 应返回 401」探测，自动发现此类限流
+- **`migrate_family_share` 被孤儿家庭拖垮**：e2e 临时用户清理后，其家庭的
+  `user_id` 悬空，回填 owner 触发外键失败 → 整个升级中断。改为跳过并告警孤儿家庭，
+  校验也不再要求它们有 owner
+
+---
+
 ## [0.5.1] - 2026-10-24
 
 ### 新增

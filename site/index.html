@@ -103,6 +103,22 @@ border-radius:14px;padding:6px 14px;font-size:12px;cursor:pointer;transition:.2s
 .settings-btn{background:rgba(255,255,255,.18);color:#fff;border:1px solid rgba(255,255,255,.35);
 border-radius:14px;padding:6px 14px;font-size:12px;text-decoration:none;transition:.2s;}
 .settings-btn:hover{background:rgba(255,255,255,.32);}
+.upload-btn{background:rgba(255,255,255,.22);border:1px solid rgba(255,255,255,.45);color:#fff;padding:6px 14px;border-radius:999px;font-size:12px;cursor:pointer;text-decoration:none;transition:.2s;font-family:inherit;}
+.upload-btn:hover{background:rgba(255,255,255,.34);}
+.hidden{display:none !important;}
+.modal-mask{position:fixed;inset:0;background:rgba(15,23,42,.55);display:none;align-items:flex-start;justify-content:center;z-index:50;overflow:auto;padding:24px 12px;}
+.modal-mask.show{display:flex;}
+.modal{background:#fff;color:#1f2937;border-radius:14px;max-width:640px;width:100%;padding:20px;margin-top:4vh;box-shadow:0 20px 50px rgba(15,23,42,.25);}
+.modal h2{margin:0;font-size:17px;}
+.modal label{display:block;font-size:13px;margin:12px 0 4px;color:#6b7280;}
+.modal input,.modal select{width:100%;padding:9px 11px;border:1px solid #e5e7eb;border-radius:8px;background:#f9fafb;font-size:14px;font-family:inherit;}
+.modal button{padding:9px 16px;border:0;border-radius:8px;background:#2563eb;color:#fff;font-size:13.5px;cursor:pointer;font-family:inherit;}
+.modal button.ghost{background:transparent;border:1px solid #e5e7eb;color:#1f2937;}
+.modal .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px;}
+.modal .msg{font-size:13px;margin-top:10px;padding:8px 12px;border-radius:8px;}
+.modal .msg.ok{background:#dcfce7;color:#166534;}
+.modal .msg.err{background:#fee2e2;color:#991b1b;}
+.modal .draft-meta{background:#f8fafc;border:1px dashed #e2e8f0;border-radius:8px;padding:10px 12px;font-size:12.5px;margin-top:12px;}
 </style>
 </head>
 <body>
@@ -112,6 +128,7 @@ border-radius:14px;padding:6px 14px;font-size:12px;text-decoration:none;transiti
   <div class="sub">每月用水 / 用电 / 燃气用量与费用记录</div>
   <div class="userbar">
     <span class="who" id="userBar">欢迎，<b id="curUser">-</b></span>
+    <button class="upload-btn" type="button" onclick="openUpload()">＋ 上传账单</button>
     <a class="settings-btn" href="/settings.html">设置</a>
     <form action="/logout" method="post"><button class="logout-btn" type="submit">退出登录</button></form>
   </div>
@@ -208,6 +225,46 @@ border-radius:14px;padding:6px 14px;font-size:12px;text-decoration:none;transiti
 
 <div class="foot">数据来源：本地 UtilityLog · 每次账单截图由 Marvis 同步录入</div>
 
+<!-- 上传账单弹窗（0.5.2 从设置页移到首页） -->
+<div class="modal-mask" id="uploadMask">
+  <div class="modal">
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <h2>上传账单</h2>
+      <button class="ghost" type="button" onclick="closeUpload()">关闭</button>
+    </div>
+    <p style="font-size:12.5px;color:#6b7280;margin:8px 0 0">
+      上传水/电/燃气账单 <b>PDF 或截图</b>（≤20MB），自动识别出草稿，核对后入库。
+      同家庭同月同类型重复保存会覆盖（upsert）。
+    </p>
+    <label for="upFamily">家庭</label>
+    <select id="upFamily">
+      <option value="">加载中…</option>
+      <option value="__new__">＋ 新建家庭…</option>
+    </select>
+    <div id="newFamilyBox" class="hidden" style="margin-top:8px">
+      <input id="newFamilyName" placeholder="输入新家庭名" maxlength="50">
+    </div>
+    <label for="upFile">账单文件</label>
+    <input type="file" id="upFile" accept=".pdf,.png,.jpg,.jpeg,.webp">
+    <div class="row">
+      <button id="btnUpload" type="button">上传并识别</button>
+      <span style="font-size:12px;color:#6b7280">PDF 本地解析文本层；图片可在设置页配置视觉模型后自动识别</span>
+    </div>
+    <div id="uploadMsg"></div>
+
+    <div id="draftBox" class="hidden">
+      <div class="draft-meta" id="draftMeta"></div>
+      <div id="draftFields"></div>
+      <div class="row">
+        <button id="btnSaveBill" type="button">保存入库</button>
+        <button class="ghost" id="btnDiscardDraft" type="button">放弃</button>
+        <span style="font-size:12px;color:#6b7280" id="draftImageHint"></span>
+      </div>
+      <div id="saveMsg"></div>
+    </div>
+  </div>
+</div>
+
 <script src="data.js?v=v0"></script>
 <script src="vendor/echarts.min.js"></script>
 <script>
@@ -215,6 +272,197 @@ const DATA = window.UTILITY_DATA || {families:[], bills:[]};
 if (DATA.user && DATA.user.username){
   document.getElementById("curUser").textContent = DATA.user.display_name || DATA.user.username;
 }
+
+// ================= 上传账单（0.5.2：入口在首页，与设置页无关） =================
+const $ = id => document.getElementById(id);
+const U_TYPE_LABEL = {water:"水费", electric:"电费", gas:"燃气"};
+
+// 各费种草稿表单字段：[key, 标签, 类型]
+const U_DRAFT_FIELDS = {
+  electric: [
+    ["usage","总电量（kWh）","number"], ["amount","总费用（元）","number"],
+    ["peak_usage","峰电量","number"], ["peak_price","峰单价","number"],
+    ["valley_usage","谷电量","number"], ["valley_price","谷单价","number"],
+    ["peak_prev_reading","峰上期示数","number"], ["peak_cur_reading","峰本期示数","number"],
+    ["valley_prev_reading","谷上期示数","number"], ["valley_cur_reading","谷本期示数","number"],
+    ["current_tier","当前档位","text"], ["tier_remaining","本档剩余","number"],
+    ["year_usage","年累计用量","number"], ["note","备注","text"],
+  ],
+  water: [
+    ["usage","用水量（吨）","number"], ["amount","总费用（元）","number"],
+    ["water_fee","水费金额","number"], ["sewage_fee","污水费金额","number"],
+    ["water_unit_price","水费单价","number"], ["sewage_unit_price","污水单价","number"],
+    ["prev_reading","上期示数","number"], ["cur_reading","本期示数","number"],
+    ["current_tier","当前档位","text"], ["tier_remaining","本档剩余","number"],
+    ["year_usage","年累计用量","number"], ["note","备注","text"],
+  ],
+  gas: [
+    ["usage","用气量（m³）","number"], ["amount","总费用（元）","number"],
+    ["unit_price","单价","number"],
+    ["prev_reading","上期示数","number"], ["cur_reading","本期示数","number"],
+    ["current_tier","当前档位","text"], ["tier_remaining","本档剩余","number"],
+    ["year_usage","年累计用量","number"], ["note","备注","text"],
+  ],
+};
+let uDraftState = null; // {bill_type, bill, image}
+
+function uEsc(s){
+  return String(s == null ? "" : s).replace(/[&<>"']/g, c =>
+    ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+async function uApi(path, opts){
+  const r = await fetch(path, Object.assign({credentials:"same-origin"}, opts||{}));
+  let data = null;
+  try { data = await r.json(); } catch(e) { data = {ok:false, error:"响应解析失败"}; }
+  if (r.status === 401){ location.href = "/login.html"; throw new Error("未登录"); }
+  return {status:r.status, data};
+}
+function uShowMsg(el, text, kind){
+  el.innerHTML = `<div class="msg ${kind}">${uEsc(text)}</div>`;
+  if (kind === "ok") setTimeout(() => { el.innerHTML = ""; }, 4000);
+}
+
+async function uLoadFamilies(){
+  try{
+    const {data} = await uApi("/api/families");
+    const fams = (data.ok && data.families) || [];
+    let html = fams.map(f =>
+      `<option value="${uEsc(f.name)}">${uEsc(f.name)}</option>`).join("");
+    if (!fams.length) html = "";
+    html += `<option value="__new__">＋ 新建家庭…</option>`;
+    $("upFamily").innerHTML = html;
+  } catch(e){
+    $("upFamily").innerHTML = `<option value="__new__">＋ 新建家庭…</option>`;
+  }
+}
+
+function openUpload(){
+  uLoadFamilies();
+  $("uploadMask").classList.add("show");
+  $("newFamilyBox").classList.add("hidden");
+  $("newFamilyName").value = "";
+  $("upFile").value = "";
+  $("uploadMsg").innerHTML = "";
+  $("draftBox").classList.add("hidden");
+  uDraftState = null;
+}
+function closeUpload(){
+  $("uploadMask").classList.remove("show");
+}
+$("upFamily").onchange = () => {
+  const isNew = $("upFamily").value === "__new__";
+  $("newFamilyBox").classList.toggle("hidden", !isNew);
+  if (isNew) $("newFamilyName").focus();
+};
+
+function uRenderDraft(draft, imageRel){
+  const btype = draft.bill_type;
+  uDraftState = {bill_type: btype, bill: draft.bill || {}, image: imageRel};
+  $("draftMeta").innerHTML =
+    `<b>识别结果：</b>${btype ? uEsc(U_TYPE_LABEL[btype]) : "未知类型"} · ` +
+    `${uEsc(draft.confidence === "high" ? "高置信度" : draft.confidence === "medium" ? "中等" : "低，请仔细核对")}<br>` +
+    uEsc(draft.message || "");
+  const defs = U_DRAFT_FIELDS[btype] || [];
+  $("draftFields").innerHTML = defs.map(([k, label, typ]) => {
+    const v = uDraftState.bill[k];
+    return `<label for="df_${k}">${uEsc(label)}</label>
+      <input id="df_${k}" type="${typ === "number" ? "number" : "text"}"
+        step="any" value="${v == null ? "" : uEsc(v)}">`;
+  }).join("") + `
+    <label for="df_month">账期（YYYY-MM）</label>
+    <input id="df_month" type="text" value="${uEsc(uDraftState.bill.month || "")}">`;
+  $("draftImageHint").textContent = imageRel ? `附件：${imageRel}` : "";
+  $("draftBox").classList.remove("hidden");
+}
+function uCollectDraft(){
+  const out = {};
+  document.querySelectorAll("#draftFields input").forEach(inp => {
+    const k = inp.id.replace(/^df_/, "");
+    const v = inp.value.trim();
+    if (v === "") return;
+    if (inp.type === "number") out[k] = Number(v);
+    else out[k] = v;
+  });
+  return out;
+}
+
+$("btnUpload").onclick = async () => {
+  let family = $("upFamily").value;
+  const file = $("upFile").files[0];
+  if (!file) return uShowMsg($("uploadMsg"), "请选择账单文件", "err");
+
+  // 选择「新建家庭」时先建家庭
+  if (family === "__new__"){
+    const name = ($("newFamilyName").value || "").trim();
+    if (!name) return uShowMsg($("uploadMsg"), "请输入新家庭名", "err");
+    const {data} = await uApi("/api/families", {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({name})
+    });
+    if (!data.ok){ uShowMsg($("uploadMsg"), data.error || "新建家庭失败", "err"); return; }
+    family = name;
+    uShowMsg($("uploadMsg"), `家庭「${name}」已创建`, "ok");
+    await uLoadFamilies();
+    $("upFamily").value = name;
+  }
+  if (!family) return uShowMsg($("uploadMsg"), "请先选择或新建家庭", "err");
+
+  const btn = $("btnUpload");
+  btn.disabled = true;
+  $("draftBox").classList.add("hidden");
+  uShowMsg($("uploadMsg"), "上传并识别中…", "ok");
+  try{
+    const fd = new FormData();
+    fd.append("file", file);
+    const {data} = await uApi("/api/bills/upload", {method:"POST", body:fd});
+    if (!data.ok){
+      uShowMsg($("uploadMsg"), data.error || "上传失败", "err");
+      return;
+    }
+    const d = data.draft || {};
+    if (!d.bill_type){
+      uShowMsg($("uploadMsg"), d.message || "未能自动识别（附件已保存），请换个格式重试", "err");
+      return;
+    }
+    uShowMsg($("uploadMsg"), "识别完成，请核对下方草稿", "ok");
+    uRenderDraft(d, data.file);
+  } catch(e){
+    uShowMsg($("uploadMsg"), "上传失败：" + e.message, "err");
+  } finally { btn.disabled = false; }
+};
+
+$("btnDiscardDraft").onclick = () => {
+  $("draftBox").classList.add("hidden");
+  uDraftState = null;
+};
+
+$("btnSaveBill").onclick = async () => {
+  if (!uDraftState) return;
+  let family = $("upFamily").value;
+  if (family === "__new__" || !family)
+    return uShowMsg($("saveMsg"), "请先选择或新建家庭", "err");
+  const payload = Object.assign({family, type: uDraftState.bill_type,
+                                 image: uDraftState.image}, uCollectDraft());
+  const btn = $("btnSaveBill");
+  btn.disabled = true;
+  try{
+    const {data} = await uApi("/api/bills", {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(payload)
+    });
+    if (data.ok){
+      uShowMsg($("saveMsg"), `已保存，正在刷新看板…`, "ok");
+      setTimeout(() => location.reload(), 900);
+    } else {
+      uShowMsg($("saveMsg"), data.error || "保存失败", "err");
+    }
+  } catch(e){
+    uShowMsg($("saveMsg"), "保存失败：" + e.message, "err");
+  } finally { btn.disabled = false; }
+};
+// ================= 上传账单 END =================
 const TYPE_META = {
   water:{name:"水费",color:"#3b82f6",unit:"m³"},
   electric:{name:"电费",color:"#f59e0b",unit:"kWh"},

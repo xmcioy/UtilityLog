@@ -133,7 +133,7 @@ ensure_python_deps() {
 
 usage() {
   cat <<'EOF'
-UtilityLog deploy.sh 0.5.1
+UtilityLog deploy.sh 0.5.2
 
 用法:
   ./deploy.sh install    首次部署（建库建表 + 安装程序 + 配置服务 + 验证 + 端到端回归）
@@ -379,16 +379,28 @@ verify() {
   echo "  auth_server 直连 :${AUTH_PORT} /settings.html -> ${set_code}（期望 200，未登录回登录页）"
 
   if [ "${NGINX_PORT}" != "${AUTH_PORT}" ]; then
-    local ngx_code ngx_mcp_code
+    local ngx_code ngx_mcp_code ngx_big_code
     ngx_code=$(http_code "$NGINX_PORT" /login.html)
     ngx_mcp_code=$(post_code "$NGINX_PORT" /mcp)
+    # 大 body 探测：账单上传的 PDF 可到 20MB，nginx client_max_body_size
+    # 默认 1MB 会在应用层之前返回 413（未鉴权大 body 正常应先拿到 401）
+    local bigf; bigf=$(mktemp)
+    dd if=/dev/zero of="$bigf" bs=1048576 count=2 status=none
+    ngx_big_code=$(curl -s --noproxy '*' -o /dev/null -w '%{http_code}' --max-time 10 \
+      -X POST -H 'Content-Type: application/json' --data-binary @"$bigf" \
+      "http://127.0.0.1:$NGINX_PORT/mcp" 2>/dev/null || echo 000)
+    rm -f "$bigf"
     echo "  nginx 反代 :${NGINX_PORT} /login.html  -> ${ngx_code}（期望 200）"
     echo "  nginx 反代 :${NGINX_PORT} /mcp(POST 未鉴权) -> ${ngx_mcp_code}（期望 401，MCP 与前端同端口）"
+    echo "  nginx 反代 :${NGINX_PORT} /mcp(2MB 大body) -> ${ngx_big_code}（期望 401；413 = client_max_body_size 太小，账单上传会被挡）"
     if [ "$ngx_code" != "200" ]; then
       warn "nginx 反代未返回 200（可能 nginx 未启动或未配置 :${NGINX_PORT}）"
     fi
     if [ "$ngx_mcp_code" != "401" ]; then
       warn "nginx 反代 /mcp 未返回 401（MCP HTTP 端点异常，请检查 auth_server 是否为新版）"
+    fi
+    if [ "$ngx_big_code" = "413" ]; then
+      warn "nginx client_max_body_size 过小：账单上传（≤20MB）会被 413 拦截，请在反代配置中加 client_max_body_size 25m"
     fi
   fi
 

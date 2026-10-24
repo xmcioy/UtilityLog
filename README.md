@@ -9,7 +9,7 @@ Three ways to enter bills: **web upload with automatic PDF recognition**, manual
 
 ## Features
 
-- 📄 **Upload & auto-recognize** — drop a bill PDF into the web UI; month, usage, peak/valley readings and tiered-pricing fields are parsed automatically, you confirm, done. Image bills can be recognized via a configurable vision-model API
+- 📄 **Upload & auto-recognize** — the "＋ 上传账单" button on the dashboard; month, usage, peak/valley readings and tiered-pricing fields are parsed automatically, you confirm, done. Pick or create a family on the spot. Image bills can be recognized via a configurable vision-model API
 - 🏠 **Multi-family** — per-family ledgers; sharing a family grants members equal management rights
 - ⚡ **Tiered & split pricing kept** — water fee + sewage fee, peak/valley readings and prices, tier level / remaining / yearly usage are first-class columns, never merged
 - 🤖 **AI skill via MCP** — local stdio and remote Streamable HTTP (`/mcp`, same port as the web UI), Bearer API Key auth
@@ -20,7 +20,7 @@ Three ways to enter bills: **web upload with automatic PDF recognition**, manual
 
 | Sample bill | Upload → review → save |
 |---|---|
-| ![Water bill sample](docs/images/bill-sample-water.png) | Settings page "账单上传识别": upload PDF/screenshot → parsed draft → confirm & save |
+| ![Water bill sample](docs/images/bill-sample-water.png) | Dashboard "＋ 上传账单" button: pick/create family → upload PDF/screenshot → parsed draft → confirm & save |
 
 ## Quick start
 

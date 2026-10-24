@@ -36,7 +36,7 @@ UL_BACKEND=mysql UL_APP_DIR=<运行目录> python3 scripts/e2e_verify.py --no-se
 
 ```bash
 # 临时 SQLite 实例 + 真实样例 PDF，覆盖 multipart 解析、草稿生成、
-# 确认入库、附件回读、越权防护 12 项断言
+# 确认入库、附件回读、越权防护、新建家庭 16 项断言
 python3 /tmp/ul_upload_e2e.py   # 脚本不入库，验收时由会话重建
 ```
 

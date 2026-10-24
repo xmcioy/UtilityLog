@@ -87,12 +87,21 @@ def main():
         print("[ddl] family_members 就绪")
 
         # 2) 回填 owner
+        # 孤儿家庭（user_id 指向已被删除的用户，如 e2e 清理残留）无法建 member
+        # 记录（外键约束）—— 跳过并告警，不让脏数据阻塞整个部署
+        user_ids = {r["id"] for r in
+                    conn.execute("SELECT id FROM users").fetchall()}
         fams = conn.execute(
             "SELECT id, name, user_id FROM families WHERE user_id IS NOT NULL").fetchall()
         print(f"[scan] 待处理家庭 {len(fams)} 个")
 
-        added = 0
+        added = skipped = 0
         for f in fams:
+            if f["user_id"] not in user_ids:
+                skipped += 1
+                print(f"[warn] 跳过孤儿家庭 id={f['id']} name={f['name']!r}"
+                      f"（user_id={f['user_id']} 已不存在，属历史测试残留）")
+                continue
             exists = conn.execute(
                 "SELECT 1 FROM family_members WHERE family_id=? AND user_id=?",
                 (f["id"], f["user_id"])).fetchone()
@@ -103,15 +112,17 @@ def main():
                 (f["id"], f["user_id"], "owner"))
             added += 1
         conn.commit()
-        print(f"[backfill] 新增 owner 记录 {added} 条")
+        print(f"[backfill] 新增 owner 记录 {added} 条"
+              + (f"，跳过孤儿家庭 {skipped} 个" if skipped else ""))
 
-        # 3) 校验
+        # 3) 校验（孤儿家庭不参与：它们本就无有效拥有者）
         # 注意：MySQL 后端用 DictCursor（返回 dict，只能用键访问），
         # SQLite 用 Row（键/索引皆可）—— 统一用「别名 + 键」保证双后端兼容。
         orphans = conn.execute(
             "SELECT f.id, f.name FROM families f "
             "LEFT JOIN family_members m ON m.family_id=f.id AND m.role='owner' "
-            "WHERE f.user_id IS NOT NULL AND m.user_id IS NULL").fetchall()
+            "WHERE f.user_id IS NOT NULL AND m.user_id IS NULL "
+            "  AND EXISTS (SELECT 1 FROM users u WHERE u.id = f.user_id)").fetchall()
         total = conn.execute(
             "SELECT COUNT(*) AS c FROM family_members").fetchone()["c"]
         owners = conn.execute(

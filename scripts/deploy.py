@@ -425,7 +425,33 @@ def verify():
         mcp_code = http_code(NGINX_PORT, "/mcp", "POST")
         print(f"  nginx 反代 :{NGINX_PORT} /login.html -> {code}（期望 200）")
         print(f"  nginx 反代 :{NGINX_PORT} /mcp(未鉴权 POST) -> {mcp_code}（期望 401）")
+        # 大 body 探测：账单上传 PDF 可到 20MB，nginx client_max_body_size
+        # 默认 1MB 会在应用层之前返回 413（未鉴权大 body 正常应先拿到 401）
+        import tempfile
+        with tempfile.NamedTemporaryFile(delete=False) as tf:
+            tf.write(b"x" * (2 << 20))
+            big = tf.name
+        try:
+            with open(big, "rb") as f:
+                big_body = f.read()
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{NGINX_PORT}/mcp", data=big_body, method="POST",
+                headers={"Content-Type": "application/json"})
+            try:
+                with opener.open(req, timeout=10) as r:
+                    big_code = r.status
+            except urllib.error.HTTPError as e:
+                big_code = e.code
+        finally:
+            os.remove(big)
+        print(f"  nginx 反代 :{NGINX_PORT} /mcp(2MB 大body) -> {big_code}"
+              f"（期望 401；413 = client_max_body_size 太小，账单上传会被挡）")
         if code != 200 or mcp_code != 401:
+            ok = False
+        if big_code == 413:
+            warn("nginx client_max_body_size 过小：账单上传（≤20MB）会被 413 拦截，"
+                 "请在反代配置中加 client_max_body_size 25m")
             ok = False
     else:
         warn(f"nginx :{NGINX_PORT} 未监听（未装 nginx 也可直接用 :{PORT} 访问）")

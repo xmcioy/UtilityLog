@@ -890,6 +890,31 @@ class Handler(BaseHTTPRequestHandler):
     def _handle_api_post(self, path, uid, username):
         import utility as U
 
+        # 新建家庭（JSON {name}；网页上传流程里「新建家庭」也用这个接口）
+        if path == "/api/families":
+            body = self._read_raw(8192)
+            if body is None:
+                return
+            try:
+                data = json.loads(body.decode("utf-8"))
+                name = (data.get("name") or "").strip()
+            except (UnicodeDecodeError, json.JSONDecodeError, AttributeError):
+                name = ""
+            if not name:
+                self._json_err("缺少家庭名 name")
+                return
+            try:
+                result = U.add_family(name, username)
+            except SystemExit:
+                self._json_err(f"家庭「{name}」已存在或名称不合法", 400)
+                return
+            created = result[1] if isinstance(result, (list, tuple)) else None
+            if not created:
+                self._json_err(f"家庭「{name}」已存在", 400)
+                return
+            self._json({"ok": True, "family": name})
+            return
+
         form = self._read_form()
 
         def field(k):
@@ -1010,6 +1035,6 @@ if __name__ == "__main__":
     # 端口可用 UL_AUTH_PORT 覆盖（跨平台部署常见：Windows/服务器上 8099 可能被占用）
     port = int(os.environ.get("UL_AUTH_PORT") or 8099)
     server = UtilityHTTPServer(("127.0.0.1", port), Handler)
-    print(f"UtilityLog auth gateway (0.5.1, backend={db_backend.get_backend()}) "
+    print(f"UtilityLog auth gateway (0.5.2, backend={db_backend.get_backend()}) "
           f"listening on 127.0.0.1:{port}", flush=True)
     server.serve_forever()

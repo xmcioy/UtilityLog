@@ -202,10 +202,17 @@ server {
     listen 80;
     server_name your.domain.com;
 
+    # 账单上传：PDF/截图可到 20MB（auth_server 侧上限同为 20MB）
+    # nginx 默认 client_max_body_size 仅 1MB，不设这一行大账单会被 413 挡在应用层之前
+    client_max_body_size 25m;
+
     location / {
         proxy_pass http://127.0.0.1:8099;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header Cookie $http_cookie;
+        proxy_set_header Authorization $http_authorization;
+        proxy_buffering off;
         proxy_read_timeout 60s;
     }
 }

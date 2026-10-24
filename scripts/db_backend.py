@@ -26,7 +26,23 @@ def resolve_app_dir():
 
 
 def get_backend():
-    return (os.environ.get("UL_BACKEND") or "sqlite").strip().lower()
+    """后端选择，优先级与文档完全一致：UL_BACKEND > db_config.json.backend > sqlite
+
+    早期实现只读环境变量，而 README / INSTALL / DESIGN 都声称会读配置文件的
+    backend 字段 —— 文档与实现不一致（0.5.2 修）。launchd 部署仍在 plist 里
+    显式写 UL_BACKEND，行为不变。
+    """
+    env = (os.environ.get("UL_BACKEND") or "").strip().lower()
+    if env in ("sqlite", "mysql"):
+        return env
+    try:
+        cfg = json.loads(Path(db_config_path()).read_text(encoding="utf-8"))
+        b = str(cfg.get("mysql", cfg).get("backend", "")).strip().lower()
+        if b in ("sqlite", "mysql"):
+            return b
+    except Exception:
+        pass
+    return "sqlite"
 
 
 def db_config_path():
