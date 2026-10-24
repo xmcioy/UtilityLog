@@ -10,6 +10,15 @@ site/data.js
 # 根目录本地技能副本（含私有配置），开源版在 skill/SKILL.md
 /SKILL.md
 
+# --- 多 agent 协作区（本地共享，严禁入库） ---
+# .agent-sync/ 存放 agent 间的变更登记、状态板与协作公约，
+# 含内部代号、任务分工等信息，仅供本机多 agent 协作使用。
+.agent-sync/
+# AGENTS.md 含本机协作路径，不入库
+AGENTS.md
+# WorkBuddy 本地记忆与工作区状态
+.workbuddy/
+
 # --- 凭据与运行状态 ---
 .auth_tokens.json
 auth_config.json

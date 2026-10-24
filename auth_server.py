@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""UtilityLog 站点认证网关（0.3 双后端版：Cookie 会话 + Bearer Token + Basic 兼容）
+"""UtilityLog 站点认证网关（0.3.1 双后端版：Cookie 会话 + Bearer Token + Basic 兼容）
 监听 127.0.0.1:8099，nginx 反代全部请求到此：
   - POST /register  注册新用户（users 表存 PBKDF2 哈希），成功即登录
   - POST /login      校验 users 表用户名密码，种 180 天 HttpOnly Cookie，302 到 /

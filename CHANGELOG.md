@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.3.1] - 2026-10-24
+
+### 新增
+- 一键部署 / 升级脚本 `scripts/deploy.sh`：`install` 模式完成 MySQL 建库建表 → 源码同步到运行目录 → 生成 `db_config.json` → 配置并加载 launchd → 启动验证；`upgrade` 模式 `git pull` → rsync 同步源码（排除 `data/ images/ entries/ temp* db_config.json .auth_tokens.json .htpasswd *.log` 等运行数据与凭据）→ 幂等 schema → 重启并验证；数据 / 程序分离，升级保留 myapp 运行数据与凭据；变量全部走 `$HOME` 与环境变量
+- `docs/API.md`：`auth_server.py` 全路由接口设计（方法 / 路径 / 参数 / 鉴权 / 返回格式 / curl 示例）
+- `db_backend.py` 自动建表：MySQL 后端连接后检测缺表时幂等执行 `db/schema.mysql.sql`（`CREATE TABLE IF NOT EXISTS`），SQLite 后端同样幂等，无需手动建表
+
+### 变更
+- `docs/DESIGN.md` 表结构设计补全：users / families / bills_water / bills_electric / bills_gas / api_tokens / user_settings 的字段、类型、外键、索引明细
+- 版本号统一升至 0.3.1（`auth_server.py` / `db/schema.sql` / `db/schema.mysql.sql`）
+- 运行目录 launchd plist 指向 `$UL_APP_DIR/auth_server.py`（程序 / 数据分离），并自动安装 `pymysql` 依赖（用户级）
+
+### 修复
+- 部署脚本兼容 macOS 默认 bash 3.2：所有变量与中文 / 全角字符邻接处改用 `${VAR}` 花括号
+- MySQL 客户端探测：`PATH` 不含 `/opt/homebrew/bin` 时自动定位 `mysql` 客户端
+
 ## [0.3.0] - 2026-10-24
 
 ### 新增

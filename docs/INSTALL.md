@@ -116,7 +116,7 @@ export UL_PASS=你的密码
 ```bash
 export UL_APP_DIR=~/myapp/utilitylog    # 运行目录（可选，默认源码根）
 python3 auth_server.py
-# UtilityLog auth gateway (0.3, backend=sqlite) listening on 127.0.0.1:8099
+# UtilityLog auth gateway (0.3.1, backend=sqlite) listening on 127.0.0.1:8099
 ```
 
 网关功能：

@@ -181,6 +181,127 @@ UtilityLog 是一个**家庭水电气账单记录与展示系统**：用户把�
 - `user_settings`：模型 API 配置（model_api_base / model_api_key / model_name）
 - 隔离：`families` 与 `bills_*` 均带 `user_id`，所有查询强制按用户过滤
 
+#### 3.2.1 字段 / 类型 / 外键 / 索引明细
+
+> 以 `db/schema.sql`（SQLite）为基准；`db/schema.mysql.sql`（MySQL）语义等价：
+> `INTEGER PRIMARY KEY AUTOINCREMENT` → `BIGINT NOT NULL AUTO_INCREMENT`，`TEXT` → `VARCHAR(n)` / `TEXT`，
+> `REAL` → `DOUBLE`，`datetime('now','localtime')` → `NOW()`，唯一约束转 `UNIQUE KEY`。
+> MySQL 版为保持部署灵活**未声明 FOREIGN KEY 约束**（逻辑外键由应用层保证），SQLite 版在 DDL 中声明 `REFERENCES`。
+
+**users（用户账号）**
+
+| 列 | SQLite | MySQL | 约束 / 外键 / 索引 |
+|---|---|---|---|
+| id | INTEGER | BIGINT | PRIMARY KEY，AUTOINCREMENT / AUTO_INCREMENT |
+| username | TEXT | VARCHAR(64) | NOT NULL，UNIQUE（uq_users_username） |
+| password_hash | TEXT | VARCHAR(512) | NOT NULL，PBKDF2-SHA256（120000 迭代） |
+| display_name | TEXT | VARCHAR(128) | 可空，默认同 username |
+| created_at | TEXT | DATETIME | NOT NULL DEFAULT 当前时间 |
+| is_active | INTEGER | TINYINT | NOT NULL DEFAULT 1 |
+
+**families（家庭）**
+
+| 列 | SQLite | MySQL | 约束 / 外键 / 索引 |
+|---|---|---|---|
+| id | INTEGER | BIGINT | PRIMARY KEY，自增 |
+| name | TEXT | VARCHAR(255) | NOT NULL；SQLite：全局 UNIQUE；MySQL：UNIQUE(user_id, name)（uq_families_user_name） |
+| user_id | INTEGER | BIGINT | 逻辑外键 → users(id)（SQLite DDL 声明 REFERENCES） |
+| created_at | TEXT | DATETIME | NOT NULL DEFAULT 当前时间 |
+
+**bills_water（水费）**
+
+| 列 | SQLite | MySQL | 约束 / 外键 / 索引 |
+|---|---|---|---|
+| id | INTEGER | BIGINT | PRIMARY KEY，自增 |
+| family_id | INTEGER | BIGINT | NOT NULL，外键 → families(id)；UNIQUE(family_id, bill_month)（uq_bills_water_family_month） |
+| user_id | INTEGER | BIGINT | 逻辑外键 → users(id) |
+| bill_month | TEXT | VARCHAR(7) | NOT NULL，YYYY-MM，与 family_id 联合唯一 |
+| usage | REAL | DOUBLE | MySQL 保留字，建表时反引号 `` `usage` `` |
+| usage_unit | TEXT | VARCHAR(16) | DEFAULT 'm³' |
+| prev_reading / cur_reading | REAL | DOUBLE | 上期 / 本期读数 |
+| water_unit_price | REAL | DOUBLE | 水费单价（元/m³） |
+| sewage_unit_price | REAL | DOUBLE | 污水单价（元/m³） |
+| water_fee / sewage_fee | REAL | DOUBLE | 水费金额 / 污水处理费金额 |
+| amount | REAL | DOUBLE | 合计 = water_fee + sewage_fee |
+| bill_date | TEXT | VARCHAR(16) | YYYY-MM-DD |
+| image | TEXT | VARCHAR(512) | 截图相对路径 |
+| note | TEXT | TEXT | 备注 |
+| current_tier | TEXT | VARCHAR(32) | 当前阶梯档位 |
+| tier_remaining / year_usage | REAL | DOUBLE | 本档剩余量 / 年累计用量 |
+| tier_detail | TEXT | TEXT | JSON 档位明细 |
+| created_at | TEXT | DATETIME | NOT NULL DEFAULT 当前时间 |
+
+**bills_electric（电费，峰谷四示数独立）**
+
+| 列 | SQLite | MySQL | 约束 / 外键 / 索引 |
+|---|---|---|---|
+| id | INTEGER | BIGINT | PRIMARY KEY，自增 |
+| family_id | INTEGER | BIGINT | NOT NULL，外键 → families(id)；UNIQUE(family_id, bill_month)（uq_bills_electric_family_month） |
+| user_id | INTEGER | BIGINT | 逻辑外键 → users(id) |
+| bill_month | TEXT | VARCHAR(7) | NOT NULL，YYYY-MM，与 family_id 联合唯一 |
+| usage / usage_unit | REAL | DOUBLE | 总用量（kWh），DEFAULT 'kWh' |
+| prev_reading / cur_reading | REAL | DOUBLE | 综合上期 / 本期示数 |
+| unit_price | REAL | DOUBLE | 综合 / 平均单价（元/kWh） |
+| peak_prev_reading / peak_cur_reading | REAL | DOUBLE | 峰上期 / 峰本期示数 |
+| valley_prev_reading / valley_cur_reading | REAL | DOUBLE | 谷上期 / 谷本期示数 |
+| peak_usage / peak_price | REAL | DOUBLE | 峰电量 / 峰单价 |
+| valley_usage / valley_price | REAL | DOUBLE | 谷电量 / 谷单价 |
+| amount | REAL | DOUBLE | 合计 = peak_usage×peak_price + valley_usage×valley_price |
+| bill_date / image / note | TEXT | VARCHAR/TEXT | 同 bills_water |
+| current_tier / tier_remaining / year_usage / tier_detail | TEXT/REAL | VARCHAR/DOUBLE/TEXT | 同 bills_water |
+| created_at | TEXT | DATETIME | NOT NULL DEFAULT 当前时间 |
+
+**bills_gas（燃气费）**
+
+| 列 | SQLite | MySQL | 约束 / 外键 / 索引 |
+|---|---|---|---|
+| id | INTEGER | BIGINT | PRIMARY KEY，自增 |
+| family_id | INTEGER | BIGINT | NOT NULL，外键 → families(id)；UNIQUE(family_id, bill_month)（uq_bills_gas_family_month） |
+| user_id | INTEGER | BIGINT | 逻辑外键 → users(id) |
+| bill_month | TEXT | VARCHAR(7) | NOT NULL，YYYY-MM，与 family_id 联合唯一 |
+| usage / usage_unit | REAL | DOUBLE | 用量（m³），DEFAULT 'm³' |
+| prev_reading / cur_reading | REAL | DOUBLE | 上期 / 本期读数 |
+| unit_price | REAL | DOUBLE | 单价（元/m³） |
+| amount | REAL | DOUBLE | 费用 = usage × unit_price |
+| bill_date / image / note | TEXT | VARCHAR/TEXT | 同 bills_water |
+| current_tier / tier_remaining / year_usage / tier_detail | TEXT/REAL | VARCHAR/DOUBLE/TEXT | 同 bills_water |
+| created_at | TEXT | DATETIME | NOT NULL DEFAULT 当前时间 |
+
+**api_tokens（会话 / API Token）**
+
+| 列 | SQLite | MySQL | 约束 / 外键 / 索引 |
+|---|---|---|---|
+| id | INTEGER | BIGINT | PRIMARY KEY，自增 |
+| user_id | INTEGER | BIGINT | NOT NULL，外键 → users(id) |
+| token | TEXT | VARCHAR(255) | NOT NULL，UNIQUE（uq_api_tokens_token），secrets.token_urlsafe(32) |
+| scope | TEXT | VARCHAR(32) | NOT NULL DEFAULT 'bill:write' |
+| expires_at | TEXT | VARCHAR(32) | 过期时间，NULL 永不过期 |
+| created_at | TEXT | DATETIME | NOT NULL DEFAULT 当前时间 |
+| last_used | TEXT | VARCHAR(32) | 最近使用时间 |
+
+**user_settings（用户设置）**
+
+| 列 | SQLite | MySQL | 约束 / 外键 / 索引 |
+|---|---|---|---|
+| user_id | INTEGER | BIGINT | PRIMARY KEY，外键 → users(id) |
+| model_api_base | TEXT | VARCHAR(512) | 通用模型 API 地址 |
+| model_api_key | TEXT | TEXT | 模型 Token（规划加密存储） |
+| model_name | TEXT | VARCHAR(128) | 模型名称 |
+| theme | TEXT | VARCHAR(16) | DEFAULT 'light' |
+| updated_at | TEXT | VARCHAR(32) | 更新时间 |
+
+索引 / 唯一键汇总：
+
+| 表 | 索引 / 唯一键 |
+|---|---|
+| users | UNIQUE(username) |
+| families | UNIQUE(user_id, name)（SQLite 为 name 全局 UNIQUE） |
+| bills_water | UNIQUE(family_id, bill_month) |
+| bills_electric | UNIQUE(family_id, bill_month) |
+| bills_gas | UNIQUE(family_id, bill_month) |
+| api_tokens | UNIQUE(token) |
+| user_settings | PRIMARY KEY(user_id) |
+
 ---
 
 ## 4. 程序逻辑设计

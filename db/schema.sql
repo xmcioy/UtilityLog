@@ -1,6 +1,6 @@
 -- ============================================================
 -- UtilityLog 数据库 Schema（SQLite）
--- 版本: 0.3.0
+-- 版本: 0.3.1
 -- 说明:
 --   - 多用户（users / api_tokens / user_settings）已启用
 --   - families 与 bills_* 均带 user_id，数据按用户隔离

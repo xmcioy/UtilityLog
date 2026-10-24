@@ -127,13 +127,57 @@ def get_conn():
             password=cfg["password"], database=cfg["database"],
             charset=cfg["charset"], cursorclass=pymysql.cursors.DictCursor,
         )
-        return _Conn(conn, "mysql")
+        c = _Conn(conn, "mysql")
+        ensure_schema(c)
+        return c
     import sqlite3
     db = os.environ.get("UL_DB", str(resolve_app_dir() / "data" / "utility.db"))
     Path(db).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db)
     conn.row_factory = sqlite3.Row
-    return _Conn(conn, "sqlite")
+    c = _Conn(conn, "sqlite")
+    ensure_schema(c)
+    return c
+
+
+REQUIRED_TABLES = {
+    "users", "families",
+    "bills_water", "bills_electric", "bills_gas",
+    "api_tokens", "user_settings",
+}
+
+
+def schema_file_path():
+    """返回仓库内 schema 文件（MySQL: db/schema.mysql.sql；SQLite: db/schema.sql）"""
+    repo_root = Path(__file__).resolve().parent.parent
+    name = "db/schema.mysql.sql" if get_backend() == "mysql" else "db/schema.sql"
+    return repo_root / name
+
+
+def ensure_schema(conn):
+    """幂等建表：检测核心表缺失后执行 schema 文件（均为 CREATE TABLE IF NOT EXISTS）。
+
+    - 仅在缺表时执行一次，避免每次连接重复 DDL；
+    - schema.mysql.sql 仍保留，供手动建表或 DBA 审阅；
+    - 目标库已存在全部核心表时直接跳过（不校验列变更，升级用 deploy.sh 处理）。
+    """
+    backend = get_backend()
+    missing = False
+    if backend == "mysql":
+        cur = conn.execute("SHOW TABLES")
+        tables = {list(r.values())[0] for r in cur.fetchall()}
+        missing = not REQUIRED_TABLES.issubset(tables)
+    else:
+        cur = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+        tables = {r[0] for r in cur.fetchall()}
+        missing = not REQUIRED_TABLES.issubset(tables)
+    if not missing:
+        return
+    schema = schema_file_path()
+    if not schema.exists():
+        raise FileNotFoundError(f"schema file not found: {schema}")
+    conn.executescript(schema.read_text(encoding="utf-8"))
 
 
 def upsert_sql(table, cols, params_count, conflict_cols, update_cols):
