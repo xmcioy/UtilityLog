@@ -11,12 +11,15 @@ PRAGMA foreign_keys = ON;
 
 -- ------------------------------------------------------------
 -- 家庭表（账单归属的家庭；归属 user_id 用户）
+-- 唯一约束：UNIQUE(user_id, name) —— 家庭名在「同一用户内」唯一，
+--           与 MySQL 版 uq_families_user_name 语义等价（0.3.2 修正）
 -- ------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS families (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    name       TEXT NOT NULL UNIQUE,
+    name       TEXT NOT NULL,
     user_id    INTEGER REFERENCES users(id),
-    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    UNIQUE(user_id, name)
 );
 
 -- ------------------------------------------------------------

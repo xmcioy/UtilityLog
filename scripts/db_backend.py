@@ -135,6 +135,15 @@ def get_conn():
     Path(db).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db)
     conn.row_factory = sqlite3.Row
+    # PRAGMA foreign_keys 是「连接级」开关，默认 OFF —— schema.sql 里的声明
+    # 只对执行该脚本的那一次连接有效，运行时连接必须逐个开启，
+    # 否则 families.user_id / bills_*.family_id 的引用完整性形同虚设。
+    conn.execute("PRAGMA foreign_keys = ON")
+    # WAL 模式：读写不互相阻塞，缓解多线程写入时的 database is locked
+    try:
+        conn.execute("PRAGMA journal_mode = WAL")
+    except sqlite3.Error:
+        pass
     c = _Conn(conn, "sqlite")
     ensure_schema(c)
     return c
@@ -145,6 +154,22 @@ REQUIRED_TABLES = {
     "bills_water", "bills_electric", "bills_gas",
     "api_tokens", "user_settings",
 }
+
+# 进程内「表已就绪」缓存，避免每次连接都做一次建表检测
+# （MySQL 的 SHOW TABLES 是网络往返，在请求热路径上代价明显）
+_SCHEMA_OK = set()
+
+
+def _schema_cache_key():
+    """缓存键：后端 + 目标库路径（不同库不能共用同一结论）"""
+    backend = get_backend()
+    if backend == "mysql":
+        try:
+            cfg = load_mysql_config()
+            return f"mysql:{cfg['host']}:{cfg['port']}/{cfg['database']}"
+        except Exception:
+            return "mysql:unknown"
+    return f"sqlite:{os.environ.get('UL_DB', str(resolve_app_dir() / 'data' / 'utility.db'))}"
 
 
 def schema_file_path():
@@ -160,8 +185,15 @@ def ensure_schema(conn):
     - 仅在缺表时执行一次，避免每次连接重复 DDL；
     - schema.mysql.sql 仍保留，供手动建表或 DBA 审阅；
     - 目标库已存在全部核心表时直接跳过（不校验列变更，升级用 deploy.sh 处理）。
+
+    性能：检测结果按「后端 + 库路径」缓存到进程内。
+    MySQL 下 SHOW TABLES 是网络往返，每个请求都查会显著放大开销。
+    缓存仅在进程生命周期内有效——服务重启后会重新检测一次（幂等，代价可接受）。
     """
     backend = get_backend()
+    key = _schema_cache_key()
+    if key in _SCHEMA_OK:
+        return
     missing = False
     if backend == "mysql":
         cur = conn.execute("SHOW TABLES")
@@ -173,11 +205,13 @@ def ensure_schema(conn):
         tables = {r[0] for r in cur.fetchall()}
         missing = not REQUIRED_TABLES.issubset(tables)
     if not missing:
+        _SCHEMA_OK.add(key)
         return
     schema = schema_file_path()
     if not schema.exists():
         raise FileNotFoundError(f"schema file not found: {schema}")
     conn.executescript(schema.read_text(encoding="utf-8"))
+    _SCHEMA_OK.add(key)
 
 
 def upsert_sql(table, cols, params_count, conflict_cols, update_cols):

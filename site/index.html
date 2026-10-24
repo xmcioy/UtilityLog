@@ -239,11 +239,20 @@ function fmt(n){
   return Number(n).toLocaleString("zh-CN", {maximumFractionDigits: 2});
 }
 
+// HTML 转义：账单字段（家庭名/档位/月份/截图路径/档位明细）来自外部输入
+// （AI 解析的账单图片），未经转义直接拼进 innerHTML 会形成存储型 XSS。
+function esc(s){
+  if (s === null || s === undefined) return "";
+  return String(s).replace(/[&<>"']/g, c => ({
+    "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;"
+  }[c]));
+}
+
 function renderTabs(){
   const el = document.getElementById("familyTabs");
   if (!DATA.families.length){ el.innerHTML = ""; return; }
   el.innerHTML = DATA.families.map(f =>
-    `<button class="family-tab ${f.id===currentFamily?'active':''}" onclick="switchFamily(${f.id})">${f.name}</button>`
+    `<button class="family-tab ${f.id===currentFamily?'active':''}" onclick="switchFamily(${Number(f.id)})">${esc(f.name)}</button>`
   ).join("");
 }
 
@@ -338,18 +347,25 @@ function renderTable(){
 }
 
 function detailThead(t){
-  if (t === "water") return `<tr><th>类型</th><th>月份</th><th>上次读数</th><th>本次读数</th><th>用量</th><th>水费单价</th><th>污水单价</th><th>水费金额</th><th>污水费金额</th><th>综合费用</th><th>当前档位</th><th>本档剩余</th><th>年累计</th><th>档位明细</th><th>凭证</th></tr>`;
-  if (t === "electric") return `<tr><th>类型</th><th>月份</th><th>峰上期</th><th>峰本期</th><th>谷上期</th><th>谷本期</th><th>峰电量</th><th>峰单价</th><th>谷电量</th><th>谷单价</th><th>综合单价</th><th>费用</th><th>当前档位</th><th>本档剩余</th><th>年累计</th><th>档位明细</th><th>凭证</th></tr>`;
-  return `<tr><th>类型</th><th>月份</th><th>上次读数</th><th>本次读数</th><th>用量</th><th>单价</th><th>费用</th><th>当前档位</th><th>本档剩余</th><th>年累计</th><th>档位明细</th><th>凭证</th></tr>`;
+  if (t === "water") return `<tr><th>类型</th><th>月份</th><th>上次读数</th><th>本次读数</th><th>用量</th><th>水费单价</th><th>污水单价</th><th>水费金额</th><th>污水费金额</th><th>综合费用</th><th>当前档位</th><th>本档剩余</th><th>年累计</th><th>档位明细</th><th>凭证</th><th>备注</th></tr>`;
+  if (t === "electric") return `<tr><th>类型</th><th>月份</th><th>峰上期</th><th>峰本期</th><th>谷上期</th><th>谷本期</th><th>峰电量</th><th>峰单价</th><th>谷电量</th><th>谷单价</th><th>综合单价</th><th>费用</th><th>当前档位</th><th>本档剩余</th><th>年累计</th><th>档位明细</th><th>凭证</th><th>备注</th></tr>`;
+  return `<tr><th>类型</th><th>月份</th><th>上次读数</th><th>本次读数</th><th>用量</th><th>单价</th><th>费用</th><th>当前档位</th><th>本档剩余</th><th>年累计</th><th>档位明细</th><th>凭证</th><th>备注</th></tr>`;
 }
 
 function tierDetailTxtOf(b){
-  let tierDetail = b.tier_detail ? JSON.parse(b.tier_detail) : null;
-  if (!tierDetail) return "-";
+  // tier_detail 必须是合法 JSON；解析失败时兜底显示，不能让异常冒泡
+  // （冒泡会中断整张明细表渲染，导致页面下半部分空白）
+  let tierDetail = null;
+  try {
+    tierDetail = b.tier_detail ? JSON.parse(b.tier_detail) : null;
+  } catch(e){
+    return "(档位明细格式错误)";
+  }
+  if (!tierDetail || typeof tierDetail !== "object") return "-";
   return Object.keys(tierDetail).map(k=>{
-    const t = tierDetail[k];
+    const t = tierDetail[k] || {};
     const priceTxt = t.峰价!=null ? `峰${t.峰价}/谷${t.谷价}` : (t.单价!=null ? `¥${t.单价}` : (t.综合价!=null ? `水${t.水费价}+污${t.污水价}` : ""));
-    return `${k}${t.上限?`(≤${t.上限})`:""}:${priceTxt}`;
+    return `${esc(k)}${t.上限?`(≤${esc(t.上限)})`:""}:${esc(priceTxt)}`;
   }).join("; ");
 }
 
@@ -359,11 +375,15 @@ function buildDetailRow(t, b){
   const tierRem = b.tier_remaining!=null ? fmt(b.tier_remaining) : "-";
   const yearUsage = b.year_usage!=null ? fmt(b.year_usage) : "-";
   const tierDetailTxt = tierDetailTxtOf(b);
-  const cert = b.image ? `<a class="img-link" target="_blank" href="images/${b.image}">截图</a>` : "";
+  // 截图路径同样来自外部输入：属性值也需转义（防 " 逃逸出属性）
+  const cert = b.image ? `<a class="img-link" target="_blank" rel="noopener" href="images/${esc(b.image)}">截图</a>` : "";
   const tagTd = `<td><span class="tag tag-${t}">${meta.name||t}</span></td>`;
-  const monthTd = `<td>${b.month}</td>`;
-  const tierTds = `<td><b>${tier}</b></td><td>${tierRem}</td><td>${yearUsage}</td><td style="font-size:11px;color:var(--sub)">${tierDetailTxt}</td>`;
+  const monthTd = `<td>${esc(b.month)}</td>`;
+  const tierTds = `<td><b>${esc(tier)}</b></td><td>${tierRem}</td><td>${yearUsage}</td><td style="font-size:11px;color:var(--sub)">${tierDetailTxt}</td>`;
   const certTd = `<td>${cert}</td>`;
+  // 备注：AI 解析账单时记录的关键说明（如「账单未印阶梯，按上海居民阶梯水价推算」），
+  // 此前只落库不展示，用户只能在腾讯文档里看到（0.3.2 补上）
+  const noteTd = `<td style="font-size:11px;color:var(--sub)">${b.note ? esc(b.note) : "-"}</td>`;
   if (t === "water"){
     const waterUnit = (b.water_fee!=null && b.usage) ? fmt(b.water_fee/b.usage) : "-";
     const sewageUnit = b.sewage_price!=null ? "¥"+fmt(b.sewage_price)+"/m³" : "-";
@@ -378,7 +398,7 @@ function buildDetailRow(t, b){
       <td>${waterFee}</td>
       <td>${sewageFee}</td>
       <td><b>¥${fmt(b.amount)}</b></td>
-      ${tierTds}${certTd}</tr>`;
+      ${tierTds}${certTd}${noteTd}</tr>`;
   }
   if (t === "electric"){
     const peakUsage = b.peak_usage!=null ? fmt(b.peak_usage)+" kWh" : "-";
@@ -396,7 +416,7 @@ function buildDetailRow(t, b){
       <td>${valleyPrice}</td>
       <td>${b.unit_price!=null ? "¥"+fmt(b.unit_price) : "-"}</td>
       <td><b>¥${fmt(b.amount)}</b></td>
-      ${tierTds}${certTd}</tr>`;
+      ${tierTds}${certTd}${noteTd}</tr>`;
   }
   return `<tr>${tagTd}${monthTd}
     <td>${b.prev_reading!=null ? fmt(b.prev_reading) : "-"}</td>
@@ -404,7 +424,7 @@ function buildDetailRow(t, b){
     <td>${fmt(b.usage)} ${b.usage_unit||meta.unit||""}</td>
     <td>${b.unit_price!=null ? "¥"+fmt(b.unit_price) : "-"}</td>
     <td><b>¥${fmt(b.amount)}</b></td>
-    ${tierTds}${certTd}</tr>`;
+    ${tierTds}${certTd}${noteTd}</tr>`;
 }
 
 function pagerHtml(type, totalCount, page, pages){
@@ -489,7 +509,8 @@ function renderTrend(){
       formatter: function(params){
         if (!params || !params.length) return "";
         const mm = params[0].axisValue;
-        let html = `<div style="font-weight:700;margin-bottom:4px">${y}年${mm}</div>`;
+        // mm 为账单月份（外部输入），tooltip 的 HTML 会被浏览器渲染，需转义
+        let html = `<div style="font-weight:700;margin-bottom:4px">${esc(y)}年${esc(mm)}</div>`;
         let feeTotal = 0;
         const feeMap = {}, useMap = {};
         params.forEach(p=>{
@@ -643,7 +664,8 @@ function renderEnergyDetail(){
       formatter: function(params){
         if (!params || !params.length) return "";
         const mm = params[0].axisValue;
-        let html = `<div style="font-weight:700;margin-bottom:4px">${y}年${mm}</div>`;
+        // mm 为账单月份（外部输入），tooltip 的 HTML 会被浏览器渲染，需转义
+        let html = `<div style="font-weight:700;margin-bottom:4px">${esc(y)}年${esc(mm)}</div>`;
         let total = null;
         const segVal = {};
         params.forEach(p=>{
@@ -707,8 +729,7 @@ function renderEnergyTier(t, y, monthBills, tm, meta){
   const tierName = tier===1 ? "第一档" : (tier===2 ? "第二档" : "第三档");
   const capTxt = cap==null ? "不限" : fmt(cap)+" "+tm.unit;
   const remainTxt = tier===3 ? "已进入第三档" : fmt(remain)+" "+tm.unit;
-  const tipTxt = yearUsage===0 ? "累计 0 "+tm.unit : "累计 "+fmt(yearUsage)+" "+tm.unit;
-  el.innerHTML = `<div class="tier-box">
+  const tipTxt = yearUsage===0 ? "累计 0 "+tm.unit : "累计 "+fmt(yearUsage)+" "+tm.unit;  el.innerHTML = `<div class="tier-box">
     <div class="tier-bar">
       <div class="tier-seg seg1" style="width:${segW1}%"><span class="tier-name">第一阶段</span></div>
       <div class="tier-seg seg2" style="width:${segW2}%"><span class="tier-name">第二阶段</span></div>

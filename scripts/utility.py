@@ -170,23 +170,63 @@ TABLE_FIELDS = {
 }
 
 
-def find_bill_table(bid, user=None):
+def find_bill_table(bid, user=None, btype=None):
     """按 id 定位账单所属表，返回 (table, row) 或 (None, None)
-    user 传入时强制校验归属（跨用户不可见/不可操作）"""
+
+    user 传入时强制校验归属（跨用户不可见/不可操作）。
+    btype 传入时只在该表查找（用于 id 跨表冲突时消歧）。
+
+    ⚠️ 三张 bills 表各自 AUTOINCREMENT，id 空间互不重叠 —— 同一个 id 可能
+    同时存在于多张表（如三表都有 id=1）。此时必须由调用方传 btype 消歧，
+    否则会命中错误的表（曾导致 delete/update 误伤其他费种的账单）。
+    多表命中且未指定 btype 时返回 (None, None) 并由调用方报错提示。
+    """
     conn = get_conn()
     try:
-        for t in VALID_TYPES:
+        uid = user_id_by_name(user) if user else None
+        types = (btype,) if btype else VALID_TYPES
+        hits = []
+        for t in types:
+            if t not in TABLE_BY_TYPE:
+                continue
+            table = TABLE_BY_TYPE[t]
             if user:
-                uid = user_id_by_name(user)
-                row = conn.execute(f"SELECT * FROM {TABLE_BY_TYPE[t]} WHERE id=? AND user_id=?",
+                row = conn.execute(f"SELECT * FROM {table} WHERE id=? AND user_id=?",
                                    (bid, uid)).fetchone()
             else:
-                row = conn.execute(f"SELECT * FROM {TABLE_BY_TYPE[t]} WHERE id=?", (bid,)).fetchone()
+                row = conn.execute(f"SELECT * FROM {table} WHERE id=?", (bid,)).fetchone()
             if row is not None:
-                return TABLE_BY_TYPE[t], row
-        return None, None
+                hits.append((table, row))
+        if not hits:
+            return None, None
+        if len(hits) > 1:
+            # id 跨表冲突：必须消歧，避免误伤
+            return None, None
+        return hits[0]
     finally:
         conn.close()
+
+
+def _norm_tier_detail(v):
+    """tier_detail 统一序列化：dict/list → JSON 字符串；str → 合法 JSON 原样存，纯文本包一层。
+
+    add 与 update 两条路径共用，保证落库内容始终是合法 JSON
+    （前端 JSON.parse 无 try/catch，非法 JSON 会导致整张明细表渲染中断）。
+    """
+    if v is None:
+        return None
+    if isinstance(v, (dict, list)):
+        return json.dumps(v, ensure_ascii=False)
+    if isinstance(v, str):
+        s = v.strip()
+        if not s:
+            return None
+        try:
+            json.loads(s)
+            return s
+        except Exception:
+            return json.dumps(s, ensure_ascii=False)
+    return json.dumps(v, ensure_ascii=False)
 
 
 def add_bill(family, month, btype, usage, amount, user=None, bill_date=None, image=None, note=None,
@@ -222,7 +262,7 @@ def add_bill(family, month, btype, usage, amount, user=None, bill_date=None, ima
         "current_tier": current_tier,
         "tier_remaining": tier_remaining,
         "year_usage": year_usage,
-        "tier_detail": json.dumps(tier_detail, ensure_ascii=False) if tier_detail else None,
+        "tier_detail": _norm_tier_detail(tier_detail),
     }
     if btype == "water":
         fields.update(water_unit_price=water_unit_price, sewage_unit_price=sewage_unit_price,
@@ -260,50 +300,96 @@ def add_bill(family, month, btype, usage, amount, user=None, bill_date=None, ima
         conn.close()
 
 
-def update_bill(bid, user=None, **fields):
+def update_bill(bid, user=None, btype=None, **fields):
     # 兼容旧参数名
-    if "sewage_price" in fields and "sewage_unit_price" not in fields:
+    if "sewage_price" in fields and fields.get("sewage_unit_price") is None:
         fields["sewage_unit_price"] = fields.pop("sewage_price")
-    if "month" in fields and "bill_month" not in fields:
+    fields.pop("sewage_price", None)
+    if "month" in fields and fields.get("bill_month") is None:
         fields["bill_month"] = fields.pop("month")
+    fields.pop("month", None)
     if "type" in fields:
         print("type cannot be changed (bill routed by table); ignoring")
         fields.pop("type", None)
-    table, row = find_bill_table(bid, user)
+    # 账期字段改名后需纳入可写白名单
+    allowed = set(TABLE_FIELDS.get(btype, [])) | {"bill_month"}
+    # 校验操作者存在，避免 user_id=NULL 导致静默无操作
+    uid = require_user(user, "update")
+    table, row = find_bill_table(bid, user, btype)
     if table is None:
-        print(f"bill {bid} not found (or not owned by user '{user}')")
+        hits = _bill_type_candidates(bid, user)
+        if len(hits) > 1:
+            print(f"error: id {bid} 在多个费种表中存在（{', '.join(hits)}），"
+                  f"请用 --type 指定：--type {hits[0]}")
+        else:
+            print(f"bill {bid} not found (or not owned by user '{user}')")
         return
     btype = "water" if table == "bills_water" else ("electric" if table == "bills_electric" else "gas")
-    allowed = set(TABLE_FIELDS[btype])
+    allowed = set(TABLE_FIELDS[btype]) | {"bill_month"}
     sets = []
     vals = []
     for k, v in fields.items():
         if k in allowed and v is not None:
-            if k == 'tier_detail' and isinstance(v, (dict, list)):
-                v = json.dumps(v, ensure_ascii=False)
+            if k == 'tier_detail':
+                v = _norm_tier_detail(v)
+                if v is None:
+                    continue
             sets.append(f"{k}=?")
             vals.append(v)
     if not sets:
         print("no fields to update")
         return
     conn = get_conn()
-    conn.execute(f"UPDATE {table} SET {', '.join(sets)} WHERE id=? AND user_id=?",
-                 vals + [bid, user_id_by_name(user)])
+    cur = conn.execute(f"UPDATE {table} SET {', '.join(sets)} WHERE id=? AND user_id=?",
+                       vals + [bid, uid])
     conn.commit()
     conn.close()
+    if cur.rowcount == 0:
+        print(f"bill {bid} not found or not owned by user '{user}'")
+        return
     print(f"bill {bid} updated ({btype}) by {user}")
 
 
-def delete_bill(bid, user=None):
-    table, row = find_bill_table(bid, user)
+def delete_bill(bid, user=None, btype=None):
+    # 校验操作者存在，避免 user_id=NULL 导致静默无操作
+    uid = require_user(user, "delete")
+    table, row = find_bill_table(bid, user, btype)
     if table is None:
-        print(f"bill {bid} not found (or not owned by user '{user}')")
+        hits = _bill_type_candidates(bid, user)
+        if len(hits) > 1:
+            print(f"error: id {bid} 在多个费种表中存在（{', '.join(hits)}），"
+                  f"请用 --type 指定：--type {hits[0]}")
+        else:
+            print(f"bill {bid} not found (or not owned by user '{user}')")
         return
     conn = get_conn()
-    conn.execute(f"DELETE FROM {table} WHERE id=? AND user_id=?", (bid, user_id_by_name(user)))
+    cur = conn.execute(f"DELETE FROM {table} WHERE id=? AND user_id=?", (bid, uid))
     conn.commit()
     conn.close()
+    if cur.rowcount == 0:
+        print(f"bill {bid} not found or not owned by user '{user}'")
+        return
     print(f"bill {bid} deleted ({table}) by {user}")
+
+
+def _bill_type_candidates(bid, user=None):
+    """返回该 id 命中的所有费种表名（用于 id 跨表冲突时提示消歧）"""
+    conn = get_conn()
+    try:
+        uid = user_id_by_name(user) if user else None
+        hits = []
+        for t in VALID_TYPES:
+            table = TABLE_BY_TYPE[t]
+            if user:
+                row = conn.execute(f"SELECT 1 FROM {table} WHERE id=? AND user_id=?",
+                                   (bid, uid)).fetchone()
+            else:
+                row = conn.execute(f"SELECT 1 FROM {table} WHERE id=?", (bid,)).fetchone()
+            if row is not None:
+                hits.append(t)
+        return hits
+    finally:
+        conn.close()
 
 
 # 三表 UNION 的统一列投影（含 sewage_price 兼容别名；非本表字段一律 NULL）
@@ -436,6 +522,19 @@ def main():
     p_add.add_argument("--peak-price", dest="peak_price", type=float, default=None, help="峰单价（electric）")
     p_add.add_argument("--valley-usage", dest="valley_usage", type=float, default=None, help="谷电量（electric）")
     p_add.add_argument("--valley-price", dest="valley_price", type=float, default=None, help="谷单价（electric）")
+    p_add.add_argument("--peak-prev-reading", dest="peak_prev_reading", type=float, default=None,
+                       help="峰上期示数（electric）")
+    p_add.add_argument("--peak-cur-reading", dest="peak_cur_reading", type=float, default=None,
+                       help="峰本期示数（electric）")
+    p_add.add_argument("--valley-prev-reading", dest="valley_prev_reading", type=float, default=None,
+                       help="谷上期示数（electric）")
+    p_add.add_argument("--valley-cur-reading", dest="valley_cur_reading", type=float, default=None,
+                       help="谷本期示数（electric）")
+    p_add.add_argument("--current-tier", dest="current_tier", default=None, help="当前档位（如 第一档）")
+    p_add.add_argument("--tier-remaining", dest="tier_remaining", type=float, default=None, help="本档剩余量")
+    p_add.add_argument("--year-usage", dest="year_usage", type=float, default=None, help="年累计用量")
+    p_add.add_argument("--tier-detail", dest="tier_detail", default=None,
+                       help="档位明细（JSON 字符串或纯文本）")
     p_add.set_defaults(func=lambda a: add_bill(a.family, a.month, a.type, a.usage, a.amount,
                                                user=a.user,
                                                bill_date=a.bill_date, image=a.image, note=a.note,
@@ -446,12 +545,21 @@ def main():
                                                peak_usage=a.peak_usage, peak_price=a.peak_price,
                                                valley_usage=a.valley_usage, valley_price=a.valley_price,
                                                sewage_price=a.sewage_price,
+                                               peak_prev_reading=a.peak_prev_reading,
+                                               peak_cur_reading=a.peak_cur_reading,
+                                               valley_prev_reading=a.valley_prev_reading,
+                                               valley_cur_reading=a.valley_cur_reading,
+                                               current_tier=a.current_tier,
+                                               tier_remaining=a.tier_remaining,
+                                               year_usage=a.year_usage,
+                                               tier_detail=a.tier_detail,
                                                water_fee=a.water_fee, sewage_fee=a.sewage_fee))
 
     p_up = sub.add_parser("update")
     p_up.add_argument("id", type=int)
-    p_up.add_argument("--month", default=None)
-    p_up.add_argument("--type", default=None)
+    p_up.add_argument("--month", default=None, help="账期 YYYY-MM（可改）")
+    p_up.add_argument("--type", default=None, choices=VALID_TYPES,
+                      help="费种（id 跨表冲突时用于消歧定位）")
     p_up.add_argument("--usage", type=float, default=None)
     p_up.add_argument("--usage-unit", dest="usage_unit", default=None)
     p_up.add_argument("--prev-reading", dest="prev_reading", type=float, default=None)
@@ -463,6 +571,10 @@ def main():
     p_up.add_argument("--peak-price", dest="peak_price", type=float, default=None)
     p_up.add_argument("--valley-usage", dest="valley_usage", type=float, default=None)
     p_up.add_argument("--valley-price", dest="valley_price", type=float, default=None)
+    p_up.add_argument("--peak-prev-reading", dest="peak_prev_reading", type=float, default=None)
+    p_up.add_argument("--peak-cur-reading", dest="peak_cur_reading", type=float, default=None)
+    p_up.add_argument("--valley-prev-reading", dest="valley_prev_reading", type=float, default=None)
+    p_up.add_argument("--valley-cur-reading", dest="valley_cur_reading", type=float, default=None)
     p_up.add_argument("--sewage-price", dest="sewage_price", type=float, default=None)
     p_up.add_argument("--amount", type=float, default=None)
     p_up.add_argument("--bill-date", dest="bill_date", default=None)
@@ -470,18 +582,28 @@ def main():
     p_up.add_argument("--note", default=None)
     p_up.add_argument("--water-fee", dest="water_fee", type=float, default=None)
     p_up.add_argument("--sewage-fee", dest="sewage_fee", type=float, default=None)
+    p_up.add_argument("--current-tier", dest="current_tier", default=None, help="当前档位")
+    p_up.add_argument("--tier-remaining", dest="tier_remaining", type=float, default=None, help="本档剩余量")
+    p_up.add_argument("--year-usage", dest="year_usage", type=float, default=None, help="年累计用量")
+    p_up.add_argument("--tier-detail", dest="tier_detail", default=None, help="档位明细（JSON 字符串或纯文本）")
     p_up.set_defaults(func=lambda a: update_bill(
-        a.id, user=a.user, month=a.month, usage=a.usage, usage_unit=a.usage_unit,
+        a.id, user=a.user, btype=a.type, month=a.month, usage=a.usage, usage_unit=a.usage_unit,
         prev_reading=a.prev_reading, cur_reading=a.cur_reading, unit_price=a.unit_price,
         water_unit_price=a.water_unit_price, sewage_unit_price=a.sewage_unit_price,
         peak_usage=a.peak_usage, peak_price=a.peak_price, valley_usage=a.valley_usage,
         valley_price=a.valley_price, sewage_price=a.sewage_price,
+        peak_prev_reading=a.peak_prev_reading, peak_cur_reading=a.peak_cur_reading,
+        valley_prev_reading=a.valley_prev_reading, valley_cur_reading=a.valley_cur_reading,
         amount=a.amount, bill_date=a.bill_date, image=a.image, note=a.note,
+        current_tier=a.current_tier, tier_remaining=a.tier_remaining,
+        year_usage=a.year_usage, tier_detail=a.tier_detail,
         water_fee=a.water_fee, sewage_fee=a.sewage_fee))
 
     p_del = sub.add_parser("delete")
     p_del.add_argument("id", type=int)
-    p_del.set_defaults(func=lambda a: delete_bill(a.id, a.user))
+    p_del.add_argument("--type", default=None, choices=VALID_TYPES,
+                       help="费种（id 跨表冲突时用于消歧定位）")
+    p_del.set_defaults(func=lambda a: delete_bill(a.id, a.user, a.type))
 
     p_ls = sub.add_parser("list")
     p_ls.add_argument("--family", default=None)

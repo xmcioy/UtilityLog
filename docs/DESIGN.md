@@ -1,6 +1,17 @@
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: 5c462fda08d022c3bf06f0c7c13f492d_f7f50b97cfad11f19f8752540064ee0f
+    ReservedCode1: TSARLnT1WnB5R9vWTXA3d453By9vg/nL2eR4Up82DOG/8jJX/nJ79kRygk6fVeNXU+Rp64HE8wZRwCx674pZEtskHTABJtN745D/CBr3fewIYdcq8SRzgLzS8OTc7o/6l3gT5lYyMxKFB/jpuuypXvfxU5SdeWdI9AYdDSGLGulLMnaSA9GVNpsY4ZY=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: 5c462fda08d022c3bf06f0c7c13f492d_f7f50b97cfad11f19f8752540064ee0f
+    ReservedCode2: TSARLnT1WnB5R9vWTXA3d453By9vg/nL2eR4Up82DOG/8jJX/nJ79kRygk6fVeNXU+Rp64HE8wZRwCx674pZEtskHTABJtN745D/CBr3fewIYdcq8SRzgLzS8OTc7o/6l3gT5lYyMxKFB/jpuuypXvfxU5SdeWdI9AYdDSGLGulLMnaSA9GVNpsY4ZY=
+---
+
 # UtilityLog 设计文档（DESIGN.md）
 
-> 版本：0.3.0（2026-10-24）
+> 版本：0.3.2（2026-10-24）
 > 目标读者：开发者 / AI 客户端（Codex、WorkBuddy 等）——任何需要理解本项目结构、意图或做后续修复改造的角色。
 > 本文档与 `db/schema.sql`、`db/schema.mysql.sql`、`CHANGELOG.md` 同步维护；代码实现偏离本文档时必须更新文档。
 
@@ -204,7 +215,7 @@ UtilityLog 是一个**家庭水电气账单记录与展示系统**：用户把�
 | 列 | SQLite | MySQL | 约束 / 外键 / 索引 |
 |---|---|---|---|
 | id | INTEGER | BIGINT | PRIMARY KEY，自增 |
-| name | TEXT | VARCHAR(255) | NOT NULL；SQLite：全局 UNIQUE；MySQL：UNIQUE(user_id, name)（uq_families_user_name） |
+| name | TEXT | VARCHAR(255) | NOT NULL；两后端统一 `UNIQUE(user_id, name)`（uq_families_user_name）——0.3.2 修正 SQLite 原全局 UNIQUE |
 | user_id | INTEGER | BIGINT | 逻辑外键 → users(id)（SQLite DDL 声明 REFERENCES） |
 | created_at | TEXT | DATETIME | NOT NULL DEFAULT 当前时间 |
 
@@ -473,8 +484,11 @@ Skill 录入：用户 token 调同一 API 入口，等价于网页录入【规�
 
 | 版本 | 日期 | 内容 |
 |---|---|---|
+| 0.3.2 | 2026-10-24 | 缺陷修复批次（详见 `docs/KNOWN_ISSUES.md`）：**id 跨表冲突**（三表 AUTOINCREMENT 空间独立，`delete/update <id>` 会误伤其他费种 → 改为多表命中时报错并要求 `--type` 消歧）；**update 静默失效**（`--sewage-price` / `--month` 别名转换条件恒不成立 → 改为值判空回退，`bill_month` 纳入可写白名单）；**CLI 补齐档位参数**（`--current-tier` / `--tier-remaining` / `--year-usage` / `--tier-detail`，打通 SKILL.md「分档必录」强制要求）；**tier_detail 序列化对称**（add/update 统一 `_norm_tier_detail`，前端 JSON.parse 补 try/catch）；**families 唯一约束对齐**（SQLite 改 `UNIQUE(user_id, name)` + 迁移脚本 `db/migrations/migrate_families_unique.py`）；**路径穿越修复**（`serve_static` 改用 `os.path.commonpath` 边界判断，替代可被 `site_backup/` 绕过的 `startswith`）；**Content-Length 校验**（负数/超长/非法一律 400/413 并关闭连接，消除线程阻塞与请求走私）；**is_active 全通道生效**（Basic 与 Token 通道补校验，停用账号立即失效）；**前端 XSS 防护**（新增 `esc()`，家庭名/档位/月份/截图路径/档位明细/tooltip 全面转义）；**SQLite 外键生效**（`PRAGMA foreign_keys=ON` 逐连接开启 + WAL）；**并发 backlog**（`request_queue_size=128`，80 并发实测全通）；**schema 检测缓存**（免去每连接一次 SHOW TABLES）；**备注列上网页**（note 此前只落库不展示） |
+| 0.3.1 | 2026-10-24 | 数据迁移 MySQL（7 表全量）、连接后幂等自动建表、`scripts/deploy.sh` 一键 install/upgrade、`docs/API.md` 接口文档 |
 | 0.3.0 | 2026-10-24 | 双后端：db_backend.py 抽象 SQLite/MySQL 方言（upsert/自增/时间函数/占位符/保留字）；schema.mysql.sql；db_config.example.json；目录分离：源码迁 project/UtilityLog、运行产物迁 myapp/utilitylog、UL_APP_DIR 可配；launchd/nginx 本地部署；MySQL 端到端验证与权限隔离 |
 | 0.2.0 | 2026-10-24 | 多用户改造：users 表启用、families/bills_* 增加 user_id、历史数据迁移至 hh、auth_server 注册/登录/退出 + Bearer Token、utility.py 按用户隔离（--user）、sync_site 按用户导出、前端用户名显示与退出、文档同步 |
 | 0.1.0 | 2026-10-24 | 首次开源化：设计文档、建表语句、脱敏源码、技能模板、双语 README、安装指南、CHANGELOG |
 
 > 修订规则：每次代码变更后同步更新本文档对应章节与 `db/schema.sql` / `db/schema.mysql.sql`；版本号按 Keep a Changelog + 语义化版本推进。
+*（内容由AI生成，仅供参考）*

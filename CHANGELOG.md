@@ -4,6 +4,35 @@ All notable changes to this project will be documented in this file.
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.3.2] - 2026-10-24
+
+### 修复
+- **2026-10-24 21:22 · workbuddy** — 0.3.2 缺陷修复批次：id 跨表冲突/路径穿越/Content-Length/XSS/is_active 等 15 项（文件：scripts/utility.py scripts/db_backend.py auth_server.py site/index.html db/schema.sql db/schema.mysql.sql db/migrations/migrate_families_unique.py docs/DESIGN.md docs/KNOWN_ISSUES.md skill/SKILL.md CHANGELOG.md）
+- **id 跨表冲突导致误删误改**（数据损坏）：三张 bills 表各自独立自增，id 空间互不重叠，`find_bill_table()` 按序扫描命中首个即返回 → `delete 1` 永远删的是水费。改为多表命中时报错并要求 `--type` 消歧；`update` / `delete` 新增 `--type water|electric|gas`
+- **update/delete 假成功**：缺失 `--user` 时 `WHERE user_id=NULL` 恒不匹配却仍打印成功。补 `require_user` 校验与 `rowcount` 校验
+- **`update --sewage-price` / `--month` 静默失效**：别名与键转换条件判「键是否存在」而非「值是否为 None」，条件恒不成立。改为值判空回退，`bill_month` 纳入可写白名单
+- **路径穿越**：`serve_static` 用 `str.startswith` 做边界判断，站点目录名为 `site` 时兄弟目录 `site_backup/` 可绕过。改用 `os.path.commonpath` 判断
+- **Content-Length 未校验**：负数导致 `rfile.read(-1)` 阻塞至 EOF 占住工作线程；超长不消费 body 导致请求走私。负数/超长→413，非法→400，一律关闭连接
+- **停用账号仍可访问**：`is_active=0` 只在 `/login` 表单路径生效，Basic 与 Token 通道未校验。补齐后停用即全通道失效
+- **前端存储型 XSS**：家庭名/档位/月份/截图路径/档位明细及 ECharts tooltip 直接拼进 `innerHTML`，而这些字段来自 AI 解析的账单图片（外部输入）。新增 `esc()` 并全面转义
+- **`tier_detail` 序列化不对称**：add 无条件 dumps、update 仅对 dict/list dumps，字符串落库为非法 JSON，前端 `JSON.parse` 抛错会中断整张明细表渲染。统一 `_norm_tier_detail()`，前端补 try/catch
+- **SQLite 外键从未生效**：`PRAGMA foreign_keys` 是连接级开关，运行时连接未设置。逐连接开启 + WAL 模式
+- **并发连接被重置**：`ThreadingHTTPServer` accept 队列默认 backlog=5。新增 `UtilityHTTPServer`，`request_queue_size=128`（80 并发实测全通）
+- **每连接重复建表检测**：MySQL 下每次连接一次 `SHOW TABLES` 网络往返。检测结果按「后端+库路径」缓存到进程内
+- **SQLite / MySQL 家庭名唯一性语义分叉**：SQLite 全局 UNIQUE vs MySQL `UNIQUE(user_id,name)`。SQLite 侧统一为 `UNIQUE(user_id, name)` + 迁移脚本
+- **备注列网页不展示**：`note` 只落库不渲染。三张明细表补「备注」列
+
+### 新增
+- CLI 补齐档位参数：`add` / `update` 支持 `--current-tier` / `--tier-remaining` / `--year-usage` / `--tier-detail`，打通 `skill/SKILL.md`「分档计费必须记录」的强制要求
+- 迁移脚本 `db/migrations/migrate_families_unique.py`：备份 → 重建表 → 行数校验 → 外键完整性检查 → 失败自动回滚，检测到跨用户重名时中止并列出冲突
+
+### 说明
+- `update` / `delete` 现在会拒绝无 `--type` 的歧义 id 操作（此前会误伤其他费种账单），AI 录入流程需相应带上 `--type`
+- `site/images` 软链在 0.3.1 脱敏清理时被删除，账单截图链接目前 404（已记入 `docs/KNOWN_ISSUES.md` P3-11）
+- `docs/KNOWN_ISSUES.md` 重写为含修复状态与新发现的完整版；`docs/DESIGN.md` 同步表结构与修订记录
+
+---
+
 ## [0.3.1] - 2026-10-24
 
 ### 新增

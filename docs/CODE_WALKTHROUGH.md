@@ -141,20 +141,22 @@ users(id, username, password_hash, display_name, is_active)
 
 ---
 
-## 6. 运行现状（本机实测）
+## 6. 部署形态（通用说明）
 
-| 项 | 状态 |
+> 本节描述**通用部署形态**，不含任何特定机器的路径、进程号或账号信息。
+> 各开发者的实际部署状态见本地协作区 `.agent-sync/PROJECT.md`（不入库）。
+
+| 项 | 说明 |
 |---|---|
-| 源码仓库 | `~/project/UtilityLog`，git 工作区干净，`main` 与 `github/main`、`gitea/main` 同步 |
-| 运行目录 | `~/myapp/utilitylog`（`UL_APP_DIR` 指定） |
-| 认证网关 | ✅ 运行中，PID 51920，`127.0.0.1:8099`，launchd `com.$USER.utility-auth.plist` 托管（KeepAlive） |
-| nginx | ✅ `:8089` → 反代 `127.0.0.1:8099`（`/opt/homebrew/etc/nginx/servers/utility.conf`） |
-| SQLite 库 | ✅ `~/myapp/utilitylog/data/utility.db`，2 用户 / 1 家庭 / 35 条账单（水 8、电 18、气 9） |
-| 登录 | ✅ 示例账号（demo）可用；Cookie 180 天；Bearer Token 鉴权验证通过且按用户隔离数据 |
-| MySQL | 端口 9306 可达（本机代理转发），但 **launchd 未设 `UL_BACKEND`，实际跑的是 SQLite** |
-| 鉴权实测 | 未登录 `/` → 200 登录页；未登录 `/data.js` → 401 ✅ |
+| 源码仓库 | 存放代码 / 模板 / 文档 / 脱敏示例，由 git 管理 |
+| 运行目录 | 存放数据库 / 图片 / 配置 / 日志 / 程序副本，由 `UL_APP_DIR` 指定，gitignore |
+| 认证网关 | 监听 `127.0.0.1:8099`，通常由 launchd（macOS）或 systemd（Linux）托管 |
+| nginx | 监听 `:8089` → 反代 `127.0.0.1:8099` |
+| 数据库 | SQLite（默认，零依赖）或 MySQL 8+（`UL_BACKEND=mysql`） |
+| 鉴权行为 | 未登录 `/` → 200 登录页；未登录 `/data.js` → 401 |
 
-**数据分布**：水费 2025-08~2026-10（用量 2~25 m³）；电费 2025-04~2026-09（峰 0.617 / 谷 0.307 单价）；燃气 2025-06~2026-10（单价 3.0 元/m³）。
+**目录分离要点**：静态模板来自**源码** `site/`，运行时数据（`data.js` / 数据库 / 图片 / 日志 / 凭据）全部在**运行目录**。
+`site/images` 指向运行目录 `images/` 的软链由部署脚本创建，不随源码入库。
 
 ---
 
@@ -261,22 +263,23 @@ github  https://xmcioy:<token>@github.com/...
 
 ---
 
-## 9. 部署链路速查
+## 9. 部署链路速查（通用形态）
 
 ```
-launchd: com.$USER.utility-auth.plist
-  ├─ ProgramArguments: /usr/bin/python3 auth_server.py
-  ├─ WorkingDirectory: ~/project/UtilityLog
-  ├─ EnvironmentVariables: UL_APP_DIR=~/myapp/utilitylog
-  └─ RunAtLoad + KeepAlive
+进程管理（launchd / systemd）
+  ├─ 执行: python3 <运行目录>/auth_server.py
+  ├─ 环境变量: UL_APP_DIR=<运行目录>、UL_BACKEND=sqlite|mysql
+  └─ RunAtLoad + KeepAlive（崩溃自动重启）
        ↓
   auth_server.py → 127.0.0.1:8099
        ↓
-nginx /opt/homebrew/etc/nginx/servers/utility.conf
-  listen 8089; proxy_pass http://127.0.0.1:8099;
+nginx  →  proxy_pass http://127.0.0.1:8099;
        ↓
 浏览器 → http://localhost:8089
 ```
+
+> 进程标签与配置路径由 `scripts/deploy.sh` 自动生成（基于 `$HOME` 推导，不硬编码用户名），
+> 详见 `docs/INSTALL.md`。
 
 **源码与运行目录的边界**：
 - 静态模板来自**源码** `site/`（`index.html`/`login.html`/`vendor/`），其中 `site/images` 是软链 → 运行目录 `images/`

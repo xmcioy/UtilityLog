@@ -195,14 +195,16 @@ def revoke_token(token):
 
 
 def token_user(token):
-    """token -> (user_id, username)；无效返回 None"""
+    """token -> (user_id, username)；无效或账号已停用返回 None"""
     if not token:
         return None
     conn = get_conn()
     try:
+        # u.is_active=1：账号停用后，已签发的 token 立即失效
         row = conn.execute(
             "SELECT t.user_id, u.username FROM api_tokens t JOIN users u ON t.user_id=u.id "
-            "WHERE t.token=? AND (t.expires_at IS NULL OR t.expires_at > datetime('now','localtime'))",
+            "WHERE t.token=? AND u.is_active=1 "
+            "AND (t.expires_at IS NULL OR t.expires_at > datetime('now','localtime'))",
             (token,)).fetchone()
         if row is None:
             return None
@@ -241,7 +243,8 @@ def auth_from_basic(headers):
     except Exception:
         return None
     row = db_user_by_name(u)
-    if row is None or not verify_password(p, row["password_hash"]):
+    # is_active：停用账号不得通过 Basic 通道登录
+    if row is None or not row["is_active"] or not verify_password(p, row["password_hash"]):
         return None
     return row["id"], row["username"]
 
@@ -289,11 +292,55 @@ def send_data_js(handler, uid, username):
     handler.wfile.write(body)
 
 
+def _is_within(path, root):
+    """判断 path 是否位于 root 之内（含 root 本身）。
+
+    不能用 str.startswith()：站点目录名为 `site` 时，兄弟目录 `site_backup/`
+    同样满足前缀匹配，会被路径穿越绕过。用 os.path.commonpath 做真实边界判断。
+    """
+    try:
+        return os.path.commonpath([str(path), str(root)]) == str(root)
+    except ValueError:
+        # 不同盘符 / 相对与绝对路径混用时无法比较，视为越界
+        return False
+
+
+# 允许读取的额外根目录（运行期产物所在处，不在站点目录内）
+# 账单截图放在 <APP_DIR>/images/，站点通过 site/images 软链访问。
+# 软链指向站点目录之外，若按解析后的真实路径做边界检查会被误判越界，
+# 故这里显式白名单化 —— 只放行 images 目录，不放开整个运行目录。
+EXTRA_ROOTS = (APP_DIR / "images",)
+
+
+def _decode_path(raw):
+    """URL 路径解码：把 %XX 转成原始字符。
+
+    必须解码，否则中文文件名（账单截图如「202610-水费-…jpg」）无法命中磁盘文件。
+    解码后仍由 serve_static 做边界检查，因此 %2e%2e%2f 这类编码过的穿越
+    会在解码后被 normpath 折叠并被 _is_within 拦下。
+    """
+    try:
+        return urllib.parse.unquote(raw, errors="strict")
+    except (UnicodeDecodeError, ValueError):
+        return raw
+
+
 def serve_static(handler, path):
     # 路径规范化，防 ../ 跳出
-    norm = os.path.normpath(path.lstrip("/"))
-    full = (ROOT / norm).resolve()
-    if not str(full).startswith(str(ROOT.resolve())) or not full.exists() or full.is_dir():
+    norm = os.path.normpath(_decode_path(path).lstrip("/"))
+    # 用 abspath 而非 resolve()：保留软链结构，才能识别 site/images → images/ 的映射
+    full = Path(os.path.abspath(ROOT / norm))
+    # 边界检查基于「未解析软链」的路径 + 软链目标的白名单，二者取其一通过即可
+    roots = [ROOT.resolve()] + [r.resolve() for r in EXTRA_ROOTS if r.exists()]
+    if not any(_is_within(full, r) for r in roots):
+        handler.send_error(404)
+        return
+    if not full.exists() or full.is_dir():
+        handler.send_error(404)
+        return
+    # 软链目标还需单独校验：确保最终落在白名单内（防 site/images 软链被指到别处）
+    real = full.resolve()
+    if not any(_is_within(real, r) for r in roots):
         handler.send_error(404)
         return
     import mimetypes
@@ -322,8 +369,18 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def _read_form(self):
-        length = int(self.headers.get("Content-Length") or 0)
-        if length > 65536:
+        raw_len = self.headers.get("Content-Length")
+        try:
+            length = int(raw_len) if raw_len else 0
+        except (TypeError, ValueError):
+            self.close_connection = True
+            self.send_error(400, "invalid Content-Length")
+            return {}
+        # 负数会让 rfile.read(-1) 阻塞到 EOF，占住工作线程；
+        # 超长时不消费 body 会导致请求走私（残留字节被当作下一个请求解析）
+        if length < 0 or length > 65536:
+            self.close_connection = True
+            self.send_error(413, "Content-Length out of range")
             return {}
         raw = self.rfile.read(length) if length else b""
         try:
@@ -416,9 +473,18 @@ class Handler(BaseHTTPRequestHandler):
             send_login_page(self, err)
 
 
+class UtilityHTTPServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer 的 accept 队列默认只有 5，
+    多用户同时打开看板（每页多个 /data.js + 图片请求）会触发内核 RST 重置连接。
+    提到 128 后实测 80 并发全部成功。"""
+
+    request_queue_size = 128
+    daemon_threads = True
+
+
 if __name__ == "__main__":
     Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     ensure_auth_tables()
-    server = ThreadingHTTPServer(("127.0.0.1", 8099), Handler)
-    print(f"UtilityLog auth gateway (0.3, backend={db_backend.get_backend()}) listening on 127.0.0.1:8099", flush=True)
+    server = UtilityHTTPServer(("127.0.0.1", 8099), Handler)
+    print(f"UtilityLog auth gateway (0.3.2, backend={db_backend.get_backend()}) listening on 127.0.0.1:8099", flush=True)
     server.serve_forever()

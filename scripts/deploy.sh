@@ -27,7 +27,8 @@ set -euo pipefail
 # ---------- 路径与环境（$HOME 推导，不硬编码用户名） ----------
 REPO_DIR="${UL_REPO_DIR:-$HOME/project/UtilityLog}"
 APP_DIR="${UL_APP_DIR:-$HOME/myapp/utilitylog}"
-LAUNCHD_LABEL="com.$USER.utility-auth"
+# launchd 标签由当前用户名派生（可用 UL_LAUNCHD_LABEL 覆盖），不硬编码具体用户名
+LAUNCHD_LABEL="${UL_LAUNCHD_LABEL:-com.$(id -un).utility-auth}"
 PLIST="$HOME/Library/LaunchAgents/$LAUNCHD_LABEL.plist"
 
 DB_NAME="${UL_DB_NAME:-utilitylog}"
@@ -41,6 +42,8 @@ AUTH_PORT="${UL_AUTH_PORT:-8099}"
 NGINX_PORT="${UL_NGINX_PORT:-8089}"
 
 # 同步源码时排除的运行时产物 / 凭据 / 日志（升级必须保留）
+# 原则：运行目录只放「程序副本 + 运行数据 + 凭据」，
+#       不放本机协作文件（AGENTS.md / .agent-sync/ / .workbuddy/）。
 RSYNC_EXCLUDES=(
   --exclude='.git/'
   --exclude='data/'
@@ -53,11 +56,13 @@ RSYNC_EXCLUDES=(
   --exclude='.auth_tokens.json'
   --exclude='.htpasswd'
   --exclude='*.log'
+  --exclude='*.bak'
   --exclude='__pycache__/'
   --exclude='.DS_Store'
   --exclude='skill/'
   --exclude='.workbuddy/'
   --exclude='.agent-sync/'
+  --exclude='AGENTS.md'
 )
 
 log()  { printf '\033[1;34m[deploy]\033[0m %s\n' "$*"; }
@@ -128,6 +133,29 @@ sync_source() {
   mkdir -p "$APP_DIR"
   log "同步源码到运行目录: $APP_DIR"
   rsync -a --delete "${RSYNC_EXCLUDES[@]}" "$REPO_DIR/" "$APP_DIR/"
+}
+
+link_images() {
+  # 站点静态模板在运行目录的 site/ 下，账单截图在运行目录的 images/ 下。
+  # 用软链把 site/images 指向 images/，使网页里的 images/<YYYY-MM>/xxx.jpg 可访问。
+  # 软链是运行期产物，不随源码入库（.gitignore 已排除 site/images）。
+  local site_dir="$APP_DIR/site" img_dir="$APP_DIR/images"
+  mkdir -p "$site_dir" "$img_dir"
+  if [ -L "$site_dir/images" ]; then
+    local cur
+    cur=$(readlink "$site_dir/images")
+    if [ "$cur" = "$img_dir" ]; then
+      log "site/images 软链已就绪"
+      return 0
+    fi
+    rm -f "$site_dir/images"
+  elif [ -e "$site_dir/images" ]; then
+    # 是真实目录而非软链：备份后重建，避免覆盖用户已有数据
+    warn "site/images 是真实目录（非软链），已备份为 site/images.bak-*"
+    mv "$site_dir/images" "$site_dir/images.bak-$(date '+%Y%m%d%H%M%S')"
+  fi
+  ln -s "$img_dir" "$site_dir/images"
+  log "已创建软链: site/images -> $img_dir"
 }
 
 write_db_config() {
@@ -258,6 +286,9 @@ SQL
   # 3) 同步源码到运行目录（程序分离）
   sync_source
 
+  # 3.1) 站点软链：site/images → 运行目录 images/（账单截图访问）
+  link_images
+
   # 4) 生成 db_config.json
   write_db_config
 
@@ -303,6 +334,9 @@ do_upgrade() {
 
   # 2) 同步源码到运行目录（排除运行数据与凭据 → 保留 myapp 运行数据）
   sync_source
+
+  # 2.1) 站点软链：site/images → 运行目录 images/（账单截图访问）
+  link_images
 
   # 3) 必要 schema 变更（幂等，不触碰数据）
   apply_schema
