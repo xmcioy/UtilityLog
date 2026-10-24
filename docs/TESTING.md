@@ -1,9 +1,24 @@
-# 测试说明（TESTING.md）
+# 测试说明（TESTING.md · 0.5.2）
 
-> 项目测试分三层：解析器单元测试 → 端到端回归 → 部署验证。
-> **铁律：三层全部通过才算可发布**（`deploy.sh upgrade` 会自动跑后两层）。
+> 项目测试分四层：后端层单元测试 → 解析器单元测试 → 端到端回归 → 部署验证。
+> **铁律：各层全部通过才算可发布**（`deploy.sh upgrade` 会自动跑后两层）。
 
-## 1. 解析器单元测试（账单识别）
+## 1. 后端层单元测试（SQL 方言与后端选择）
+
+```bash
+python3 scripts/test_db_backend.py
+```
+
+17 项断言，不需要真连数据库，覆盖 `db_backend` 的纯函数：
+
+- `_mysql_sql()`：占位符 `?`→`%s`、`usage` 反引号、`AUTOINCREMENT`、`datetime('now','localtime')`
+  → `NOW()`、`last_insert_rowid()` → `LAST_INSERT_ID()`
+- **字符串字面量保护**（0.5.2）：`LIKE '%?%'` 不被改成 `'%%s%'`、字面量里的 `usage`
+  不加反引号、SQL 转义单引号 `''` 不破坏保护、字面量与占位符混排各自正确
+- `upsert_sql()`：SQLite `ON CONFLICT ... excluded` 与 MySQL `ON DUPLICATE KEY ... VALUES()`
+- `get_backend()` 优先级：`UL_BACKEND` > `db_config.json.backend` > `sqlite`
+
+## 2. 解析器单元测试（账单识别）
 
 ```bash
 python3 scripts/test_bill_parser.py
@@ -25,12 +40,14 @@ cd <运行目录>
 UL_BACKEND=mysql UL_APP_DIR=<运行目录> python3 scripts/e2e_verify.py --no-server
 ```
 
-41 项检查，全部用临时用户/家庭/账单真跑，结束自动清理：
+48 项检查，全部用临时用户/家庭/账单真跑，结束自动清理：
 
 - MCP stdio 十个工具（initialize / tools/list / add / list / summary / share…）
 - 家庭共享同等权限（读写删、成员表、取消共享）
 - 网页 API（登录、API Key 签发与重置、Bearer/Basic 通道、密码修改）
 - 页面可用性与金额不变式
+- **0.5.2 新增**：upsert 两种语义（默认增量保留 / `replace` 全量覆盖）、
+  金额不自洽时告警、重复注册返回非 0、API Key 不能冒充网页会话 Cookie
 
 ## 3. 功能专项端到端（账单上传识别，0.5.0）
 
@@ -61,6 +78,10 @@ bash scripts/deploy.sh upgrade
 | auth_server 直连 /data.js、/api/me、/mcp（未鉴权 POST） | 401 |
 | nginx 反代 /login.html、/mcp（未鉴权） | 200 / 401 |
 | MySQL 核心表缺失数量 | 0 |
-| e2e_verify 41 项 | 全部 PASS |
+| e2e_verify 48 项 | 全部 PASS |
+| test_db_backend 17 项 | 全部 PASS |
 
 `UL_SKIP_E2E=1` 可跳过 e2e（仅限排障，不推荐）。
+
+> 本机验证一律加 `--noproxy '*'`：环境设了 `HTTP_PROXY` 时，
+> `curl 127.0.0.1:8099` 会把请求发给代理拿到 502，误判成服务不可用。

@@ -8,18 +8,22 @@ All notable changes to this project will be documented in this file.
 
 ### 变更
 - **2026-10-25 07:35 · workbuddy** — 0.5.2：上传入口移到首页弹窗（含新建家庭），POST /api/families；修复 nginx client_max_body_size 挡大 PDF 与迁移遇孤儿家庭失败；部署验证增大body探测（文件：auth_server.py site/index.html site/settings.html db/migrations/migrate_family_share.py scripts/deploy.sh scripts/deploy.py docs/API.md docs/INSTALL.md docs/TESTING.md docs/DESIGN.md README.md README.zh-CN.md CHANGELOG.md）
+- **2026-10-25 07:52 · workbuddy** — 0.5.2：已知问题清零（SEC-1 / P2-5 / P3-5~P3-11 / P4-2 / P4-3 全部处理）+ 安装、已知问题、路线图三份文档收敛进 README 后删除（文件：scripts/utility.py scripts/db_backend.py auth_server.py scripts/mcp_server.py scripts/e2e_verify.py scripts/test_db_backend.py README.md README.zh-CN.md docs/API.md docs/DESIGN.md docs/TESTING.md docs/CODE_WALKTHROUGH.md skill/SKILL.md scripts/deploy.py CHANGELOG.md）
 - **上传入口移到看板首页**：头部新增「＋ 上传账单」按钮 + 弹窗（上传/识别/核对/入库全流程），
   设置页的上传卡片移除（设置页只保留 API Key / 密码 / 家庭共享）
 - **上传时可直接新建家庭**：家庭下拉选「＋ 新建家庭…」即可输入名称创建，
   无需先去设置页/CLI 建家庭
+- **版本号单一来源**：`scripts/utility.py` 新增 `__version__`，auth_server 启动横幅从它取，
+  不再多处各写各的
 
 ### 新增
 - `POST /api/families`（JSON `{name}`）：网页端新建家庭，重复名称返回 400；
   首页上传流程与将来其他页面共用
-
-### 测试
-- 上传识别专项 e2e 扩充到 16 项：新增家庭创建、重复名 400、空名 400、未登录 401 断言
-- 真机抽测发现并修复两个问题（见下）
+- **`add --replace` 开关**（CLI 与 MCP `add_bill.replace`）：upsert 语义显式化 ——
+  默认增量保留（只覆盖本次传入字段，未传的保留旧值，符合「缺项不编造」）；
+  `--replace` 全量覆盖（未传字段清 NULL，适合整单重新录入）
+- **`scripts/test_db_backend.py`**：17 项后端层单元测试（方言翻译、字面量保护、
+  upsert 双方言、后端选择优先级）
 
 ### 修复
 - **nginx 默认 `client_max_body_size` 1MB 挡住大账单 PDF**：2MB+ 的 PDF 上传在 nginx 层
@@ -28,6 +32,44 @@ All notable changes to this project will be documented in this file.
 - **`migrate_family_share` 被孤儿家庭拖垮**：e2e 临时用户清理后，其家庭的
   `user_id` 悬空，回填 owner 触发外键失败 → 整个升级中断。改为跳过并告警孤儿家庭，
   校验也不再要求它们有 owner
+- **`get_backend()` 不读 `db_config.json.backend`**（P3-5）：与文档声称的优先级不一致，
+  现在按 `UL_BACKEND` > 配置文件的 `backend` 字段 > `sqlite` 读取
+- **`_mysql_sql()` 污染字符串字面量**（P3-7 / P3-8）：`?`→`%s` 与 `usage` 反引号都是全局替换，
+  `LIKE '%?%'` 会被改成 `'%%s%'`。改为先把字面量摘出来占位、替换完再放回
+- **`api_tokens.scope` 只写不读**（P3-9）：长期 API Key 与网页会话完全等价。现在
+  Cookie 只认 `scope='session'`，Bearer 接受 `api` 与 `session`，API Key 不再能
+  冒充网页会话
+- **`register_user` 吞掉所有异常**（P3-6）：磁盘满、表不存在都被误报「用户已存在」
+  且退出码 0（假成功）。改为只把唯一约束冲突解释为已存在，其余原样报错并非零退出
+- **`send_login_page` 的 `__ERR__` 死分支**（P3-10）：占位符在登录页里根本不存在，
+  已删除（错误提示由页面 JS 读 query string 渲染）
+- **upsert 破坏「总价=分项之和」**（P2-5）：重复录入时旧分项 + 新总额会不自洽。
+  现在保存后用落库值复算，不自洽明确告警，并提供 `--replace` 全量覆盖
+- **金额告警在 MCP 通道不可见**：utility 的 warning 只 print，而 MCP 把 stdout
+  重定向到 stderr → 工具调用方看不到。改为经 `warn_sink` 收集并放进工具返回的
+  `warnings` 字段
+- **`register` 文档语法与实现不符**（P4-2）：文档写位置参数，实际是
+  `--user <name> register --password <pass>`，README 已按实现修正
+
+### 安全
+- **git remote 内嵌明文 token**（SEC-1）：4 个 remote 的凭据全部移入 macOS 钥匙串
+  （`credential.helper=osxkeychain`），URL 清理为无凭据形式，推送仍正常。
+  **遗留**：钥匙串里的 token 仍是原值，曾出现在 URL/history 的凭据应视为已泄露，
+  请尽快轮换
+
+### 文档
+- **三份文档收敛进 README 后删除**：`docs/INSTALL.md`（安装部署）、
+  `docs/ROADMAP.md`（路线图）、`docs/KNOWN_ISSUES.md`（已知问题）。
+  原因：问题清单已全部修完，留着只会让人以为还有未修的坑；内部待办不应公开可见。
+  安装与部署、路线图内容并入 README（中英双语），`DESIGN.md` / `API.md` /
+  `CODE_WALKTHROUGH.md` / `skill/SKILL.md` / `deploy.py` 的引用同步更新
+- README 版本号升至 0.5.2，并补「常见问题」：代理 502、launchd 注册、凭据轮换
+
+### 测试
+- 上传识别专项 e2e 扩充到 16 项：新增家庭创建、重复名 400、空名 400、未登录 401 断言
+- `e2e_verify.py` 扩充到 48 项：新增 upsert 两种语义、金额不自洽告警、重复注册退出码、
+  API Key 冒充 Cookie 被拒
+- 真机抽测发现并修复两个问题（见上）
 
 ---
 

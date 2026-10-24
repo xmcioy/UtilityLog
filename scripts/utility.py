@@ -7,6 +7,9 @@ UtilityLog 水电气账单数据管理脚本（0.3 双后端版）
 - 运行目录：UL_APP_DIR（优先）→ UL_ROOT → 仓库根；配置凭据 auth_config.json 位于运行目录
 - 支持 add / list / update / delete / add-family / list-users / init
 - 所有数据操作按用户隔离，命令行 --user 指定操作者（默认取配置凭据用户）
+
+版本号单一来源（0.5.2）：本模块的 `__version__` 是程序内唯一的版本标识，
+auth_server 启动横幅、部署脚本、文档都从它取（避免多处各写各的、越改越乱）。
 """
 import argparse
 import hashlib
@@ -18,6 +21,8 @@ from datetime import datetime
 from pathlib import Path
 
 import db_backend
+
+__version__ = "0.5.2"
 
 APP_DIR = db_backend.resolve_app_dir()
 DB_PATH = os.environ.get("UL_DB", str(APP_DIR / "data" / "utility.db"))
@@ -106,8 +111,17 @@ def register_user(username, password, display_name=None):
                            (username, hash_password(password), display_name or username))
         conn.commit()
         print(f"user registered: {username} (id={cur.lastrowid})")
-    except Exception:
-        print(f"user already exists: {username}")
+    except Exception as e:
+        # 只把「唯一约束冲突」解释为用户已存在（0.5.2 修）。
+        # 早期版本是 except Exception 一律打印 "user already exists"，
+        # 磁盘满、表不存在、连接断开都会被伪装成已存在 —— 掩盖真实故障，
+        # 且退出码仍是 0（假成功）。
+        msg = str(e).lower()
+        if any(k in msg for k in ("unique", "duplicate", "already exists")):
+            print(f"user already exists: {username}")
+        else:
+            print(f"error: register failed: {e}")
+        sys.exit(1)
     finally:
         conn.close()
 
@@ -422,6 +436,49 @@ def family_name_exists_elsewhere(name, user):
         conn.close()
 
 
+def _amount_invariant_ok(btype, row):
+    """校验「总价 = 分项之和」；信息不足返回 None（无法判定，不误报）。
+
+    这是项目的核心不变式（用户反复强调），但 upsert 的两种语义都可能破坏它：
+    增量保留时「旧分项 + 新总额」会不自洽，全量覆盖时分项被清空也谈不上自洽。
+    因此在保存后拿落库值复算一次，不自洽就明确告警（0.5.2）。
+    """
+    def num(k):
+        try:
+            v = row[k]
+        except Exception:
+            return None
+        return None if v is None else float(v)
+
+    amount = num("amount")
+    if amount is None:
+        return None
+    if btype == "water":
+        wf, sf = num("water_fee"), num("sewage_fee")
+        if wf is None or sf is None:
+            return None
+        return abs((wf + sf) - amount) <= 0.01
+    if btype == "electric":
+        pu, pp, vu, vp = (num("peak_usage"), num("peak_price"),
+                          num("valley_usage"), num("valley_price"))
+        if None in (pu, pp, vu, vp):
+            return None
+        return abs((pu * pp + vu * vp) - amount) <= 0.01
+    if btype == "gas":
+        u, p = num("usage"), num("unit_price")
+        if u is None or p is None:
+            return None
+        return abs((u * p) - amount) <= 0.01
+    return None
+
+
+_INVARIANT_HINT = {
+    "water": "水费金额 + 污水费金额",
+    "electric": "峰电量×峰单价 + 谷电量×谷单价",
+    "gas": "用量 × 单价",
+}
+
+
 def add_bill(family, month, btype, usage, amount, user=None, bill_date=None, image=None, note=None,
              prev_reading=None, cur_reading=None, unit_price=None,
              water_unit_price=None, sewage_unit_price=None,
@@ -430,7 +487,7 @@ def add_bill(family, month, btype, usage, amount, user=None, bill_date=None, ima
              peak_prev_reading=None, peak_cur_reading=None,
              valley_prev_reading=None, valley_cur_reading=None,
              current_tier=None, tier_remaining=None, year_usage=None, tier_detail=None,
-             water_fee=None, sewage_fee=None):
+             water_fee=None, sewage_fee=None, replace=False, warn_sink=None):
     uid = require_user(user, "add")
     fid = family_id_by_name(family, user)
     if fid is None:
@@ -474,8 +531,12 @@ def add_bill(family, month, btype, usage, amount, user=None, bill_date=None, ima
                           peak_prev_reading=peak_prev_reading, peak_cur_reading=peak_cur_reading,
                           valley_prev_reading=valley_prev_reading, valley_cur_reading=valley_cur_reading)
     cols = list(dict.fromkeys(["usage", "amount"] + [k for k in TABLE_FIELDS[btype] if fields.get(k) is not None]))
-    # upsert 字段（排除 NULL；为空时全列兜底）
-    upd_cols = cols if cols else TABLE_FIELDS[btype]
+    # upsert 语义（0.5.2 明确化，此前是「只更新本次传入的列」但没有任何说明与开关）：
+    #   默认  增量保留 —— 只覆盖本次显式传入的字段，未传字段保留原值
+    #   --replace 全量覆盖 —— 未传字段一律置 NULL，适合整单重新录入
+    # 两者的取舍：前者符合「缺项不编造」，后者符合「重复录入即覆盖整单」。
+    # 无论哪种都可能让 amount 与分项之和不自洽，故保存后统一校验并告警。
+    upd_cols = TABLE_FIELDS[btype] if replace else (cols if cols else TABLE_FIELDS[btype])
     vals = [fields[c] for c in cols]
     sql = db_backend.upsert_sql(
         table,
@@ -489,9 +550,18 @@ def add_bill(family, month, btype, usage, amount, user=None, bill_date=None, ima
         conn.execute(sql, [fid, uid, month] + vals)
         conn.commit()
         row = conn.execute(
-            f"SELECT id FROM {table} WHERE family_id=? AND bill_month=? AND user_id=?",
+            f"SELECT * FROM {table} WHERE family_id=? AND bill_month=? AND user_id=?",
             (fid, month, uid)).fetchone()
         print(f"bill saved: user={user} family={family} month={month} type={btype} usage={usage} amount={amount} id={row['id']} (upsert)")
+        # 总价 = 分项之和 校验（0.5.2）：用落库后的真实值复算，不自洽则告警而非静默
+        if _amount_invariant_ok(btype, row) is False:
+            msg = (f"amount={row['amount']} 与分项之和不自洽（应为 {_INVARIANT_HINT[btype]}）。"
+                   f"重复录入未传的字段默认保留旧值；如需整单覆盖请加 --replace")
+            print(f"warning: {msg}")
+            # warn_sink 供 MCP 层收集告警：MCP 的 stdout 被重定向到 stderr，
+            # 只 print 的话工具调用方看不到这条告警（曾因此漏掉一次回归）。
+            if warn_sink is not None:
+                warn_sink.append(msg)
     except Exception as e:
         print(f"error: {e}")
         sys.exit(1)
@@ -798,6 +868,9 @@ def main():
     p_add.add_argument("--year-usage", dest="year_usage", type=float, default=None, help="年累计用量")
     p_add.add_argument("--tier-detail", dest="tier_detail", default=None,
                        help="档位明细（JSON 字符串或纯文本）")
+    p_add.add_argument("--replace", action="store_true",
+                       help="全量覆盖：未传的字段一律清空。"
+                            "默认增量保留（只覆盖本次传入字段，未传的保留旧值）")
     p_add.set_defaults(func=lambda a: add_bill(a.family, a.month, a.type, a.usage, a.amount,
                                                user=a.user,
                                                bill_date=a.bill_date, image=a.image, note=a.note,
@@ -816,7 +889,8 @@ def main():
                                                tier_remaining=a.tier_remaining,
                                                year_usage=a.year_usage,
                                                tier_detail=a.tier_detail,
-                                               water_fee=a.water_fee, sewage_fee=a.sewage_fee))
+                                               water_fee=a.water_fee, sewage_fee=a.sewage_fee,
+                                               replace=a.replace))
 
     p_up = sub.add_parser("update")
     p_up.add_argument("id", type=int)

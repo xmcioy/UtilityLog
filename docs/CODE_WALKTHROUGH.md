@@ -205,18 +205,20 @@ error: unrecognized arguments: --current-tier 第一档 --tier-remaining 100 --y
 `update_bill()` 里 `month` → `bill_month` 的转换同样因「键总是存在且值为 None」而失效；且 `bill_month` 不在 `TABLE_FIELDS` 白名单内，双重拦截 → 改账期报 `no fields to update`。
 **影响**：无法修正录错的月份（只能删了重录）。
 
-### 🟡 P3-1　`get_backend()` 不读 `db_config.json` 的 `backend` 字段
+### ✅ P3-1　`get_backend()` 不读 `db_config.json` 的 `backend` 字段（0.5.2 已修）
 
-文档（README:51 / DESIGN.md:215,262 / INSTALL.md:30）一致声称优先级为 `UL_BACKEND` > `db_config.json.backend` > `sqlite`，**但实现只读环境变量**：
+文档（README / DESIGN）声称优先级为 `UL_BACKEND` > `db_config.json.backend` > `sqlite`，早期实现只读环境变量：
 
 ```python
 def get_backend():
     return (os.environ.get("UL_BACKEND") or "sqlite").strip().lower()
 ```
 
-**影响**：`db_config.json` 里明明写了 `"backend": "mysql"`，但不加 `UL_BACKEND=mysql` 就静默跑 SQLite（本机 launchd 正是此状态）。文档与实现不一致，易误判部署状态。
+**影响**：`db_config.json` 里明明写了 `"backend": "mysql"`，但不加 `UL_BACKEND=mysql` 就静默跑 SQLite。文档与实现不一致，易误判部署状态。
 
-### 🟡 P3-2　`send_login_page` 的 `__ERR__` 占位符不存在
+**修法（0.5.2）**：`get_backend()` 现在按文档优先级读取 —— 环境变量未指定时读配置文件的 `backend` 字段，都没有才默认 `sqlite`；launchd 部署仍在 plist 里显式写 `UL_BACKEND`，行为不变。回归见 `scripts/test_db_backend.py`。
+
+### ✅ P3-2　`send_login_page` 的 `__ERR__` 占位符不存在（0.5.2 已删）
 
 `auth_server.py:265` 做 `body.replace(b"__ERR__", err)`，但 `site/login.html` 里**没有 `__ERR__` 占位符**（登录页用 JS 读 `?err=` 参数渲染错误）。
 **影响**：无害但冗余——服务端注入的错误消息永远不会显示；实际错误提示靠前端 JS，行为正确。多余的分支代码易误导维护者。
@@ -229,7 +231,7 @@ def get_backend():
 
 `add_bill` 里连续调用 `require_user` → `user_id_by_name`（开一次连接）+ `family_id_by_name`（再开一次连接），`add` 路径最多开 4~5 次连接。数据量小时无感，但 SQLite 下连接开销显著。
 
-### 🟡 P3-5　`register_user` 吞掉所有异常
+### ✅ P3-5　`register_user` 吞掉所有异常（0.5.2 已修）
 
 ```python
 except Exception:
@@ -237,18 +239,27 @@ except Exception:
 ```
 任何异常（磁盘满、表不存在、字段超长）都被误报为「用户已存在」，排查困难。
 
-### 🟡 P3-6　`_mysql_sql` 的 `usage` 反引号替换作用于整个 SQL 字符串
+### ✅ P3-6　`_mysql_sql` 的 `usage` 反引号替换作用于整个 SQL 字符串（0.5.2 已修）
 
 ```python
 sql = re.sub(r"(?<!`)\busage\b(?!`)", "`usage`", sql)
 ```
-不区分列名与字符串字面量。若将来 SQL 里出现 `'usage'` 字面量会被破坏。当前无此情况，但属于隐患。
+不区分列名与字符串字面量。若将来 SQL 里出现 `'usage'` 字面量会被破坏。
+
+**修法（0.5.2）**：`_mysql_sql()` 先把字符串字面量摘出来占位，替换完再放回 ——
+`?`→`%s` 与 usage 反引号都只作用于代码部分。同类隐患（`LIKE '%?%'` 被改成 `'%%s%'`）
+一并堵住。回归见 `scripts/test_db_backend.py`（17 项断言）。
 
 ---
 
 ## 8. 开源安全提醒
 
-`git remote` 中 **3 个 remote 的 URL 内嵌了明文凭据**：
+> 0.5.2 更新：URL 内嵌凭据的问题**已修复** —— 4 个 remote 的 token 全部移入
+> macOS 钥匙串（`credential.helper=osxkeychain`），URL 已清理为无凭据形式。
+> 遗留事项：钥匙串里的 token 仍是原值，**建议尽快轮换**（曾出现在 URL/history 里的凭据
+> 都应视为已泄露）。
+
+历史问题记录（修复前）：`git remote` 中 3 个 remote 的 URL 内嵌了明文凭据：
 
 ```
 gitea   https://xmcioy:<token>@<gitea-host>/...
@@ -278,8 +289,8 @@ nginx  →  proxy_pass http://127.0.0.1:8099;
 浏览器 → http://localhost:8089
 ```
 
-> 进程标签与配置路径由 `scripts/deploy.sh` 自动生成（基于 `$HOME` 推导，不硬编码用户名），
-> 详见 `docs/INSTALL.md`。
+> 进程标签与配置路径由 `scripts/deploy.sh` / `scripts/deploy.py` 自动生成（基于 `$HOME`
+> 推导，不硬编码用户名），详见 README「一键部署」。
 
 **源码与运行目录的边界**：
 - 静态模板来自**源码** `site/`（`index.html`/`login.html`/`vendor/`），其中 `site/images` 是软链 → 运行目录 `images/`
@@ -290,15 +301,20 @@ nginx  →  proxy_pass http://127.0.0.1:8099;
 
 ## 10. 维护建议优先级
 
-| 优先级 | 动作 |
-|---|---|
-| P0 | 轮换 git remote 中的明文 token，改用 SSH / credential helper |
-| P1 | 修 `update --sewage-price` 与 `--month` 的失效（影响数据准确性） |
-| P1 | 统一 SQLite / MySQL 的 `families` 唯一约束（补迁移脚本） |
-| P2 | 为 CLI 补齐档位参数，打通 SKILL.md 的强制要求 |
-| P2 | 让 `get_backend()` 真正读 `db_config.json.backend`，或修正文档措辞 |
-| P3 | 清理 `__ERR__` 死分支；`register_user` 区分「已存在」与「其他错误」 |
-| P3 | 抽出 `db/migrations/` 下的 schema 迁移脚本机制（当前仅 `migrate_multiuser.py` 一个） |
+> 0.5.2 更新：下面 P0~P2 的条目**已全部完成**（P0 凭据移入钥匙串并清理 URL，
+> P1/P2 见 0.3.2 与 0.5.2 修订记录）。剩余动作只有「轮换已泄露过的 token」与
+> 「继续补迁移脚本」两项。
+
+| 优先级 | 动作 | 状态 |
+|---|---|---|
+| P0 | git remote 明文 token → 钥匙串 + 清理 URL；**轮换已泄露 token** | 已迁移，轮换待人工 |
+| P1 | `update --sewage-price` / `--month` 静默失效 | ✅ 0.3.2 |
+| P1 | SQLite / MySQL `families` 唯一约束统一 + 迁移脚本 | ✅ 0.3.2 |
+| P2 | CLI 补齐档位参数 | ✅ 0.3.2 |
+| P2 | `get_backend()` 读 `db_config.json.backend` | ✅ 0.5.2 |
+| P3 | `__ERR__` 死分支、`register_user` 异常分类 | ✅ 0.5.2 |
+| P3 | `_mysql_sql` 字面量保护（`LIKE '%?%'` 隐患） | ✅ 0.5.2 |
+| P3 | 继续补 `db/migrations/` 迁移脚本（当前 2 个） | 进行中（随 schema 变更追加） |
 
 ---
 
@@ -309,8 +325,16 @@ nginx  →  proxy_pass http://127.0.0.1:8099;
 | 0.1.0 | 2026-10-24 | 首次开源化：设计文档、建表语句、脱敏源码、技能模板、双语 README |
 | 0.2.0 | 2026-10-24 | 多用户改造：users 表启用、user_id 隔离、注册/登录/退出、Bearer Token、迁移脚本 |
 | 0.3.0 | 2026-10-24 | 双后端（db_backend 方言抽象）、MySQL schema、源码/运行目录分离、launchd/nginx 部署 |
+| 0.3.1 | 2026-10-24 | MySQL 全量迁移、幂等自动建表、deploy.sh 一键部署、API 文档 |
+| 0.3.2 | 2026-10-24 | 15 项缺陷修复（id 跨表冲突、路径穿越、Content-Length、XSS、外键、backlog…） |
+| 0.4.0 | 2026-10-24 | MCP Streamable HTTP `/mcp`（与前端同端口）+ 家庭共享 |
+| 0.4.1 | 2026-10-24 | e2e 回归脚本 + 部署链路修复 + MCP 健壮性 + API Key 自动签发 |
+| 0.5.0 | 2026-10-24 | 网页上传账单自动识别（bill_parser + /api/bills/upload） |
+| 0.5.1 | 2026-10-24 | 跨平台部署 deploy.py（macOS/Linux/Windows）+ UL_AUTH_PORT |
+| 0.5.2 | 2026-10-25 | 已知问题清零 + 文档收敛进 README + 凭据入钥匙串 |
 
-**0.4 规划**（已在 schema 中预留 `user_settings` 表）：网页手工编辑账单 · 设置页配置模型 API · 网页上传图文记录 · Skill 与网页双录入并存。
+**后续规划**见 README「路线图」：网页内编辑/删除账单、解析自学习、提醒与预算、
+同比/环比图表、导出、移动端打磨、多实例聚合、本地 OCR、PWA、国际化。
 
 ---
 

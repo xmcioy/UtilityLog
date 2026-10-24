@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-UtilityLog 端到端回归验证（0.4.1）
+UtilityLog 端到端回归验证（0.5.2）
 
 用途：每次 deploy.sh upgrade 之后执行，确认「升级后的程序真的可用」，而不只是端口在听。
 
@@ -276,6 +276,12 @@ def run_all():
     rc, out, err = cli(["--user", U_B, "register", "--password", PASS_B])
     check("CLI register 创建用户 B", rc == 0, (err or out)[:120])
 
+    # 0.5.2：重复注册必须退出码非 0。早期版本 except Exception 一律打印
+    # "user already exists" 却返回 0（假成功），真实故障也会被这句话掩盖。
+    rc, out, err = cli(["--user", U_A, "register", "--password", PASS_A])
+    check("重复注册返回非 0 退出码（不再是假成功）", rc != 0,
+          (out or err)[:80])
+
     # ============ 1) MCP 服务 ============
     print("[e2e] 1. MCP 服务（stdio JSON-RPC）", flush=True)
     m = MCP()
@@ -283,7 +289,7 @@ def run_all():
         res = m.request("initialize", {
             "protocolVersion": "2024-11-05",
             "capabilities": {},
-            "clientInfo": {"name": "e2e_verify", "version": "0.4.1"}})
+            "clientInfo": {"name": "e2e_verify", "version": "0.5.2"}})
         ok = "result" in res and "serverInfo" in res.get("result", {})
         check("MCP initialize 握手", ok, res.get("result", {}).get("serverInfo", {}).get("name", ""))
 
@@ -335,6 +341,47 @@ def run_all():
 
         r = m.call("get_summary", {"family": FAM, "year": 2099, "user": U_A})
         check("MCP get_summary 汇总可用", not r.get("isError"), str(r)[:120])
+
+        # ---- 0.5.2：upsert 语义显式化 ----
+        # 第一次：带 note 的完整录入
+        m.call("add_bill", {"family": FAM, "month": "2099-03", "type": "water",
+                            "usage": 10.0, "amount": 40.0, "note": "第一次录入",
+                            "water_fee": 20.0, "sewage_fee": 20.0,
+                            "user": U_A})
+        # 第二次（增量保留，默认）：不传 note → 旧 note 应保留
+        m.call("add_bill", {"family": FAM, "month": "2099-03", "type": "water",
+                            "usage": 12.0, "amount": 40.0,
+                            "water_fee": 20.0, "sewage_fee": 20.0,
+                            "user": U_A})
+        r = m.call("list_bills", {"family": FAM, "month": "2099-03", "user": U_A})
+        bills_03 = r if isinstance(r, list) else r.get("bills", [])
+        note_after_inc = (bills_03[0].get("note") if bills_03 else None)
+        check("增量保留（默认）：未传字段保留旧值", note_after_inc == "第一次录入",
+              "note=%r" % note_after_inc)
+
+        # 第三次（全量覆盖 replace=true）：不传 note → 应被清空
+        m.call("add_bill", {"family": FAM, "month": "2099-03", "type": "water",
+                            "usage": 14.0, "amount": 40.0,
+                            "water_fee": 20.0, "sewage_fee": 20.0,
+                            "replace": True, "user": U_A})
+        r = m.call("list_bills", {"family": FAM, "month": "2099-03", "user": U_A})
+        bills_03 = r if isinstance(r, list) else r.get("bills", [])
+        note_after_rep = (bills_03[0].get("note") if bills_03 else "missing")
+        usage_after_rep = (bills_03[0].get("usage") if bills_03 else None)
+        check("全量覆盖（replace=true）：未传字段被清空", note_after_rep in (None, ""),
+              "note=%r" % note_after_rep)
+        check("全量覆盖仍写入本次传入的字段", usage_after_rep == 14.0,
+              "usage=%s" % usage_after_rep)
+
+        # ---- 0.5.2：不变式告警 ----
+        # 故意造一条 amount 与分项之和不自洽的记录，服务端应告警（不是静默）
+        r = m.call("add_bill", {"family": FAM, "month": "2099-04", "type": "water",
+                                "usage": 10.0, "amount": 99.0,
+                                "water_fee": 20.0, "sewage_fee": 20.0,
+                                "user": U_A})
+        check("金额不自洽时给出告警（不静默）",
+              "warning" in str(r).lower() and "不自洽" in str(r),
+              str(r)[:120])
 
         # ============ 2) 家庭共享：同等权限 ============
         print("[e2e] 2. 家庭共享（被共享者同等管理权限）", flush=True)
@@ -435,6 +482,13 @@ def run_all():
     newtok = json.loads(body).get("token", "") if code == 200 else ""
     check("POST /api/tokens/reset 重置 API Key", bool(newtok),
           "%s…（明文仅此一次返回）" % newtok[:8])
+
+    # 0.5.2：scope 校验。API Key（scope='api'）只用于 API / MCP 的 Bearer 通道，
+    # 不应被当成网页会话 Cookie 使用（此前 scope 字段只写不读，两者完全等价）。
+    code, _ = w.get("/api/me", {"Cookie": "ul_token=" + newtok})
+    check("API Key 冒充网页会话 Cookie 被拒绝", code == 401, "got %s" % code)
+    code, _ = w.get("/api/me", {"Authorization": "Bearer " + newtok})
+    check("同一把 Key 走 Bearer 通道正常", code == 200, "got %s" % code)
 
     # Bearer / Basic 双通道（API Key 作为机器入口）
     code, body = w.get("/api/me", {"Authorization": "Bearer " + newtok})

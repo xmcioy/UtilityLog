@@ -319,4 +319,5 @@ curl -b cookies.txt -X POST http://127.0.0.1:8089/api/families \
 - 路径：静态模板取源码 `site/`；运行数据（`data/`、`db_config.json`、日志）取运行目录（`UL_APP_DIR` > `UL_ROOT` > 仓库根）
 - 部署 / 升级：`bash scripts/deploy.sh install | upgrade`（0.4.1 起升级末尾自动跑 `scripts/e2e_verify.py`
   端到端回归，未通过即判定该版本不可发布）
-- launchd 托管见 `scripts/deploy.sh`（无 GUI 会话上下文时自动回退独立进程），nginx 反代见 INSTALL.md
+- 部署见 README「一键部署 / nginx 反代」；服务托管见 `scripts/deploy.sh` / `deploy.py`
+  （无 GUI 会话上下文时自动回退独立进程）

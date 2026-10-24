@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""UtilityLog 跨平台部署工具（0.5.1，纯标准库，macOS / Linux / Windows 通用）
+"""UtilityLog 跨平台部署工具（0.5.2，纯标准库，macOS / Linux / Windows 通用）
 
 为什么再写一个 Python 版：`scripts/deploy.sh` 依赖 bash / rsync / launchd / brew，
 只在 macOS（部分 Linux）可用。本脚本用标准库做同样的事，三平台一致：
@@ -253,10 +253,10 @@ def init_db():
         log(f"数据库连接正常（后端 {db_backend.get_backend()}，URL 之外的建表由服务自动完成）")
     except Exception as e:
         warn(f"数据库连接失败：{e}（SQLite 首次运行会自动建表；"
-             f"MySQL 需先建库建用户见 docs/INSTALL.md）")
+             f"MySQL 需先建库建用户，SQL 见 README「MySQL 后端」）")
         return
     if backend == "mysql":
-        log("MySQL 后端：请确保已执行 docs/INSTALL.md 的建库建用户语句")
+        log("MySQL 后端：请确保已执行 README「MySQL 后端」的建库建用户语句")
 
 
 # ---------------------------------------------------------------------------

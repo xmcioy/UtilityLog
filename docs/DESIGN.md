@@ -89,14 +89,19 @@ UtilityLog 是一个**家庭水电气账单记录与展示系统**：用户把�
 │       └── migrate_multiuser.py   0.1 → 0.2 迁移（备份 + 建表 + 数据归属 hh）
 ├── docs/
 │   ├── DESIGN.md          本文档
-│   ├── INSTALL.md         安装部署指南（传统命令 + AI 客户端 + MySQL）
+│   ├── API.md             HTTP API 与 MCP 端点说明
+│   ├── TESTING.md         测试套件与部署验证说明
+│   ├── CODE_WALKTHROUGH.md 代码走读（维护者向）
 │   └── AI_AGENTS.md       AI 客户端（Codex/WorkBuddy）指令安装说明
 ├── auth_config.example.json  凭据配置模板（真实 auth_config.json 放运行目录）
 ├── db_config.example.json    MySQL 连接配置模板（真实 db_config.json 放运行目录）
-├── README.md              中英文双语说明
+├── README.md              中英文双语说明（含安装部署 / MySQL / nginx / 路线图）
 ├── CHANGELOG.md           修订记录
 ├── LICENSE                MIT
 └── .gitignore             排除本地私有数据
+
+> 0.5.2 起安装与部署收敛到 README：此前的 `docs/INSTALL.md`、`docs/KNOWN_ISSUES.md`、
+> `docs/ROADMAP.md` 已分别合并进 README（问题全部修完）或删除，避免内部待办公开可见。
 
 运行目录 ~/myapp/utilitylog/（不入库）
 ├── data/utility.db        SQLite 数据库（UL_BACKEND=sqlite 时）
@@ -343,7 +348,7 @@ UtilityLog 是一个**家庭水电气账单记录与展示系统**：用户把�
 3. **三表 UNION 统一投影**：`UNION_COLS` 把三张表投影为同一列集（非本表字段为 NULL），前端 / sync_site 无需感知拆表细节；兼容旧字段别名 `sewage_price`。
 4. **档位 JSON**：`tier_detail` 存 JSON 字符串，写入时 `json.dumps`，读取时原样输出。
 5. **用户隔离（0.2）**：所有查询/写入强制带 `user_id`（由 `--user` 解析）；家庭名只在同一用户内唯一；`list/update/delete` 找不到他人数据时如实报错；`DEFAULT_USER` 读取 `UL_USER` 或 `auth_config.json`，未配置则必须显式传 `--user`。
-6. **路径解析（0.3 目录分离）**：运行目录由 `UL_APP_DIR` > `UL_ROOT` > 仓库根（`Path(__file__).resolve().parent.parent`）推导；数据库默认 `{运行目录}/data/utility.db`（SQLite）或读 `{运行目录}/db_config.json`（MySQL），详见 INSTALL.md。
+6. **路径解析（0.3 目录分离）**：运行目录由 `UL_APP_DIR` > `UL_ROOT` > 仓库根（`Path(__file__).resolve().parent.parent`）推导；数据库默认 `{运行目录}/data/utility.db`（SQLite）或读 `{运行目录}/db_config.json`（MySQL），详见 README「一键部署 / MySQL 后端」。
 7. **双后端（0.3）**：`db_backend.py` 提供 `get_conn()` / `get_backend()`，后端由环境变量 `UL_BACKEND`（sqlite|mysql）选择，缺省读运行目录 `db_config.json` 的 `backend` 字段，再缺省为 `sqlite`；SQL 方言差异（upsert / 自增 / 时间函数 / 占位符 / 类型）在 `db_backend._mysql_sql()` 中统一改写，业务 SQL 保持 SQLite 方言书写。
 8. **缺项不编造**：CLI 只写用户/解析出的字段，缺失留 NULL；上游解析层（Skill）负责提示缺失。
 
@@ -471,13 +476,13 @@ Skill 录入：用户 token 调同一 API 入口，等价于网页录入【规�
 
 ## 6. 认证与安全
 
-| 项 | 现状（0.3） | 规划（0.4+） |
+| 项 | 现状（0.5.2） | 规划（0.6+） |
 |---|---|---|
 | 存储 | SQLite 默认 / MySQL 可选（专属低权限用户，仅本库权限） | 同左 + 连接池 |
 | 登录 | users 表 + PBKDF2 哈希，注册/登录 | 同左 + 可选过期策略 |
-| 会话 | 180 天 HttpOnly Cookie（api_tokens 持久化） | 同左 + 刷新/吊销 |
-| API | Bearer Token（api_tokens 表，每用户独立） | scope 细化 |
-| 密钥 | 环境变量/配置文件（初始 hh）；MySQL root 仅建库授权用，不入库不落盘 | 同左 |
+| 会话 | 180 天 HttpOnly Cookie（api_tokens 持久化，scope='session'） | 同左 + 刷新/吊销 |
+| API | Bearer API Key（scope='api'，不过期）与网页会话分域：Cookie 只认 session，Bearer 两者皆可 | scope 进一步细化 |
+| 密钥 | 环境变量/配置文件；MySQL root 仅建库授权用，不入库不落盘；远端凭据走 macOS 钥匙串 | 同左 |
 | 静态站 | nginx 反代 + Tunnel | 同左 |
 | 私有数据 | .gitignore 全排除（真实配置/库/日志均放运行目录） | 同左 |
 
@@ -487,6 +492,7 @@ Skill 录入：用户 token 调同一 API 入口，等价于网页录入【规�
 
 | 版本 | 日期 | 内容 |
 |---|---|---|
+| 0.5.2 | 2026-10-25 | **已知问题清零 + 文档收敛**：① `get_backend()` 补齐 `db_config.json.backend` 读取，与文档声称的优先级一致；② `_mysql_sql()` 替换前先摘出字符串字面量，杜绝 `LIKE '%?%'` 被 `?`→`%s` 污染、保留字反引号误伤字面量两处静默错误；③ `api_tokens.scope` 真正参与鉴权（Cookie 只认 session，Bearer 接受 api+session）；④ `register_user` 区分唯一约束冲突与真实故障，退出码不再假成功；⑤ upsert 语义显式化：默认增量保留、`--replace` 全量覆盖，并用落库值复算「总价=分项之和」告警；⑥ 删除 `__ERR__` 死分支；⑦ git remote 凭据全部移入 macOS 钥匙串，URL 不再内嵌 token；⑧ 安装/已知问题/路线图三份文档收敛进 README（问题全部修完，内部待办不再公开可见）；⑨ 版本号单一来源 `scripts/utility.py __version__` |
 | 0.5.0 | 2026-10-24 | **网页上传账单自动识别**：`POST /api/bills/upload`（multipart ≤20MB，附件落 `images/uploads/`）解析出草稿不落库，`POST /api/bills` 确认入库/手工录入（复用 MCP 工具层，已登录用户强制执行）；解析器 `scripts/bill_parser.py` 纯文本层解析（国网上海电费分时/上海燃气阶梯/供水分项三类模板 + 非分时兜底），PDF 拆词容错，金额取「应付」保证分项不变式；图片账单走设置页「模型 API」视觉识别（可选）；pypdf 可选依赖由 deploy 自动安装；README 精简并配图，新增 docs/TESTING.md 与 docs/ROADMAP.md |
 | 0.4.1 | 2026-10-24 | **MCP Streamable HTTP 端点**：`POST /mcp` 挂入 auth_server，复用 `scripts/mcp_server.py` 工具层与三通道鉴权，与前端共用 nginx `:8089` 端口（域名只需转发一个端口）；HTTP 通道强制以已认证用户执行（`threading.local` 请求上下文覆盖工具参数 `user`），杜绝冒充；支持 JSON-RPC batch 与纯通知 202；stdio 本地传输保持不变（stdout 重定向从模块级移入 stdio main，消除被 import 时的副作用）；`deploy.sh verify` 增加 `/mcp` 未鉴权 401 检查（直连 + nginx 反代） |
 | 0.3.2 | 2026-10-24 | 缺陷修复批次（详见 `docs/KNOWN_ISSUES.md`）：**id 跨表冲突**（三表 AUTOINCREMENT 空间独立，`delete/update <id>` 会误伤其他费种 → 改为多表命中时报错并要求 `--type` 消歧）；**update 静默失效**（`--sewage-price` / `--month` 别名转换条件恒不成立 → 改为值判空回退，`bill_month` 纳入可写白名单）；**CLI 补齐档位参数**（`--current-tier` / `--tier-remaining` / `--year-usage` / `--tier-detail`，打通 SKILL.md「分档必录」强制要求）；**tier_detail 序列化对称**（add/update 统一 `_norm_tier_detail`，前端 JSON.parse 补 try/catch）；**families 唯一约束对齐**（SQLite 改 `UNIQUE(user_id, name)` + 迁移脚本 `db/migrations/migrate_families_unique.py`）；**路径穿越修复**（`serve_static` 改用 `os.path.commonpath` 边界判断，替代可被 `site_backup/` 绕过的 `startswith`）；**Content-Length 校验**（负数/超长/非法一律 400/413 并关闭连接，消除线程阻塞与请求走私）；**is_active 全通道生效**（Basic 与 Token 通道补校验，停用账号立即失效）；**前端 XSS 防护**（新增 `esc()`，家庭名/档位/月份/截图路径/档位明细/tooltip 全面转义）；**SQLite 外键生效**（`PRAGMA foreign_keys=ON` 逐连接开启 + WAL）；**并发 backlog**（`request_queue_size=128`，80 并发实测全通）；**schema 检测缓存**（免去每连接一次 SHOW TABLES）；**备注列上网页**（note 此前只落库不展示） |

@@ -130,6 +130,9 @@ def tool_add_bill(a):
     if isinstance(tier_detail, (dict, list)):
         tier_detail = _dumps(tier_detail, ensure_ascii=False)
 
+    # 告警收集器：utility.add_bill 会把「总价与分项之和不自洽」等告警写进来。
+    # 必须显式收集 —— MCP 的 stdout 被重定向到 stderr，print 的内容工具调用方看不到。
+    warns = []
     try:
         U.add_bill(
             family=a["family"], month=a["month"], btype=a["type"],
@@ -150,6 +153,8 @@ def tool_add_bill(a):
             tier_remaining=a.get("tier_remaining"),
             year_usage=a.get("year_usage"),
             tier_detail=tier_detail,
+            replace=bool(a.get("replace")),
+            warn_sink=warns,
         )
     except SystemExit:
         return _err("录入失败（参数校验未通过，见服务端日志）")
@@ -160,7 +165,7 @@ def tool_add_bill(a):
     rows = U.list_bills(user, a["family"], a["month"], a["type"])
     if rows:
         b = rows[0]
-        return _ok(_dumps({
+        out = {
             "saved": True,
             "id": b.get("id"),
             "family": b.get("family"),
@@ -173,7 +178,10 @@ def tool_add_bill(a):
             "current_tier": b.get("current_tier"),
             "tier_remaining": b.get("tier_remaining"),
             "year_usage": b.get("year_usage"),
-        }, ensure_ascii=False, indent=2))
+        }
+        if warns:
+            out["warnings"] = warns
+        return _ok(_dumps(out, ensure_ascii=False, indent=2))
     return _ok("已写入，但回读未找到记录，请用 list_bills 确认")
 
 
@@ -330,6 +338,11 @@ _TIER_PROPS = {
                     "description": "各档明细 JSON，如 "
                                    '{"一档":{"上限":220,"综合价":4.05}}；'
                                    "电费含峰价/谷价，水费含分项水费价+污水价+污水比例"},
+    # 0.5.2：upsert 语义显式化。默认增量保留（未传字段保留旧值，符合「缺项不编造」）；
+    # replace=true 为全量覆盖（未传字段清 NULL，适合整单重新录入）。
+    "replace": {"type": "boolean",
+                "description": "true=全量覆盖（未传字段一律清空）；"
+                               "省略/false=增量保留（默认）"},
 }
 
 _SHARED_PROPS = {

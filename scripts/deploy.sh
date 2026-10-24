@@ -426,6 +426,19 @@ verify() {
   log "验证通过 ✅"
 }
 
+run_unit_tests() {
+  # 后端层单元测试（0.5.2 接入）：SQL 方言与后端选择优先级是纯函数测试，
+  # 不需要数据库，但正是「不报错、结果不对」那类静默错误的回归防线。
+  local t="$APP_DIR/scripts/test_db_backend.py"
+  if [ ! -f "$t" ]; then
+    warn "未找到 $t，跳过后端层单元测试"
+    return 0
+  fi
+  log "后端层单元测试（test_db_backend）..."
+  ( cd "$APP_DIR" && /usr/bin/python3 "$t" ) \
+    || die "后端层单元测试未通过 —— 该版本不可发布"
+}
+
 # 端到端回归：端口在听不代表功能可用。
 # 用临时用户/临时家庭/临时账单真跑一遍核心链路，无论成败都自动清理。
 run_e2e() {
@@ -493,7 +506,8 @@ SQL
   # 7) 验证
   verify
 
-  # 8) 端到端回归
+  # 8) 单元测试 + 端到端回归
+  run_unit_tests
   run_e2e
 
   log "首次部署完成。访问: http://127.0.0.1:$NGINX_PORT"
@@ -546,8 +560,10 @@ do_upgrade() {
   # 6) 验证
   verify
 
-  # 7) 端到端回归：服务能响应 ≠ 功能可用。
-  #    用临时用户/家庭/账单真跑一遍 MCP、家庭共享、网页 API，跑完自动清理。
+  # 7) 单元测试 + 端到端回归：服务能响应 ≠ 功能可用。
+  #    单元测试守 SQL 方言/后端选择这类纯函数，端到端用临时数据真跑一遍
+  #    MCP、家庭共享、网页 API、upsert 语义，跑完自动清理。
+  run_unit_tests
   run_e2e
 
   log "升级完成。myapp 运行数据与凭据已保留（data/ db_config.json .auth_tokens.json 等未覆盖）"

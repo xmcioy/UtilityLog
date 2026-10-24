@@ -44,7 +44,7 @@ DB_PATH = os.environ.get("UL_DB", str(APP_DIR / "data" / "utility.db"))
 ROOT = Path(__file__).resolve().parent / "site"   # 源码静态模板（随仓库）
 SCRIPTS = str(Path(__file__).resolve().parent / "scripts")
 sys.path.insert(0, SCRIPTS)  # 幂等
-from utility import dump_json, user_id_by_name  # noqa: E402
+from utility import __version__, dump_json, user_id_by_name  # noqa: E402
 import mcp_server  # noqa: E402  （MCP 工具层：/mcp 端点复用其 handle() 与工具声明）
 import bill_parser  # noqa: E402  （0.5.0 账单上传识别）
 
@@ -291,18 +291,29 @@ def change_password(user_id, old_password, new_password):
     return True, "密码已修改，请重新登录"
 
 
-def token_user(token):
-    """token -> (user_id, username)；无效或账号已停用返回 None"""
+def token_user(token, scopes=None):
+    """token -> (user_id, username)；无效 / 停用 / scope 不符返回 None
+
+    scopes=None 表示不限制 scope（仅供内部确认 token 是否存在时使用）；
+    网页 Cookie 只接受 scope='session'，API / MCP 的 Bearer 接受
+    scope='api' 与 'session'。
+
+    0.5.2 之前这里完全不校验 scope —— `api_tokens.scope` 全仓库只有写入、
+    没有读取，长期 API Key 与网页会话完全等价（误导性设计）。
+    """
     if not token:
         return None
     conn = get_conn()
     try:
+        sql = ("SELECT t.user_id, u.username FROM api_tokens t JOIN users u ON t.user_id=u.id "
+               "WHERE t.token=? AND u.is_active=1 "
+               "AND (t.expires_at IS NULL OR t.expires_at > datetime('now','localtime'))")
+        args = [token]
+        if scopes:
+            sql += " AND t.scope IN (%s)" % ",".join("?" * len(scopes))
+            args += list(scopes)
         # u.is_active=1：账号停用后，已签发的 token 立即失效
-        row = conn.execute(
-            "SELECT t.user_id, u.username FROM api_tokens t JOIN users u ON t.user_id=u.id "
-            "WHERE t.token=? AND u.is_active=1 "
-            "AND (t.expires_at IS NULL OR t.expires_at > datetime('now','localtime'))",
-            (token,)).fetchone()
+        row = conn.execute(sql, tuple(args)).fetchone()
         if row is None:
             return None
         conn.execute("UPDATE api_tokens SET last_used=datetime('now','localtime') WHERE token=?", (token,))
@@ -314,19 +325,26 @@ def token_user(token):
 
 # ---------------- 鉴权 ----------------
 
+# 网页会话 token 的 scope；API Key 走 Bearer，见 API_SCOPE
+SESSION_SCOPES = ("session",)
+# Bearer 通道：长期 API Key 与网页会话都接受（脚本/技能两种用法都要照顾）
+BEARER_SCOPES = ("api", "session")
+
+
 def auth_from_cookie(headers):
     cookie = headers.get("Cookie", "")
     for part in cookie.split(";"):
         part = part.strip()
         if part.startswith(COOKIE_NAME + "="):
-            return token_user(part[len(COOKIE_NAME) + 1:])
+            # Cookie 只认会话 token：API Key 不该被当成网页会话用
+            return token_user(part[len(COOKIE_NAME) + 1:], SESSION_SCOPES)
     return None
 
 
 def auth_from_bearer(headers):
     auth = headers.get("Authorization", "")
     if auth.startswith("Bearer "):
-        return token_user(auth.split(" ", 1)[1].strip())
+        return token_user(auth.split(" ", 1)[1].strip(), BEARER_SCOPES)
     return None
 
 
@@ -355,14 +373,18 @@ def current_user(headers):
 
 # ---------------- 页面与静态服务 ----------------
 
-def send_login_page(handler, err=None):
+def send_login_page(handler):
+    """渲染登录页。错误提示由页面 JS 读 query string 自行渲染。
+
+    早期版本这里有个 `body.replace(b"__ERR__", err)` 的分支，而 login.html 里
+    根本没有 `__ERR__` 占位符（用的是 JS 读 `?err=`）—— 属于永不生效的死代码，
+    已删除（0.5.2）。
+    """
     html = ROOT / "login.html"
     if html.exists():
         body = html.read_bytes()
     else:
         body = b"<html><body>Login required</body></html>"
-    if err:
-        body = body.replace(b"__ERR__", err.encode("utf-8"))
     handler.send_response(200)
     handler.send_header("Content-Type", "text/html; charset=utf-8")
     handler.send_header("Content-Length", str(len(body)))
@@ -1011,13 +1033,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
         else:
-            err = None
-            if path == "/login.html" and "err=1" in self.path:
-                err = "用户名或密码错误，请重试"
-            elif path == "/login.html" and "err=2" in self.path:
-                qs = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
-                err = "注册失败：" + (qs.get("msg", [""])[0] or "用户名已存在")
-            send_login_page(self, err)
+            # 登录页的错误提示由页面 JS 读 query string 渲染，服务端无需再算一遍
+            # （早期版本在服务端拼 err 文本再替换占位符，而占位符并不存在，属死代码）
+            send_login_page(self)
 
 
 class UtilityHTTPServer(ThreadingHTTPServer):
@@ -1035,6 +1053,7 @@ if __name__ == "__main__":
     # 端口可用 UL_AUTH_PORT 覆盖（跨平台部署常见：Windows/服务器上 8099 可能被占用）
     port = int(os.environ.get("UL_AUTH_PORT") or 8099)
     server = UtilityHTTPServer(("127.0.0.1", port), Handler)
-    print(f"UtilityLog auth gateway (0.5.2, backend={db_backend.get_backend()}) "
+    # 版本号单一来源：scripts/utility.py 的 __version__（0.5.2 起，避免多处各写各的）
+    print(f"UtilityLog auth gateway ({__version__}, backend={db_backend.get_backend()}) "
           f"listening on 127.0.0.1:{port}", flush=True)
     server.serve_forever()

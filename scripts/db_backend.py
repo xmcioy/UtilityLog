@@ -105,14 +105,32 @@ class _Conn:
 
 
 def _mysql_sql(sql):
-    """SQLite 风格 SQL -> MySQL 方言（仅做安全字符级替换）"""
-    sql = sql.replace("AUTOINCREMENT", "AUTO_INCREMENT")
+    """SQLite 风格 SQL -> MySQL 方言（仅做安全字符级替换）
+
+    ⚠️ 替换前必须先把字符串字面量「摘出来占位、替换完再放回」。
+    否则两类隐蔽 bug 会长期潜伏：
+      - `?` → `%s` 是全局替换，`LIKE '%?%'` 会变成 `'%%s%'`，匹配语义完全错；
+      - 保留字反引号替换不区分列名与字面量，会误伤字面量里的 usage 字样。
+    本项目当前 SQL 没有这类写法，但一旦有人写了就是「不报错、结果不对」
+    的静默错误，因此从源头堵住（0.5.2）。
+    """
+    # 1) datetime('now','localtime') 先替换（目标串固定，不受字面量保护影响）
     sql = re.sub(r"\bdatetime\(['\"]now['\"],\s*['\"]localtime['\"]\)", "NOW()", sql, flags=re.I)
+    # 2) 摘出字符串字面量（含 '' 转义），替换期间用占位符顶替
+    literals = []
+
+    def _stash(m):
+        literals.append(m.group(0))
+        return "\x00LIT%d\x00" % (len(literals) - 1)
+
+    sql = re.sub(r"'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"", _stash, sql)
+    # 3) 安全替换
+    sql = sql.replace("AUTOINCREMENT", "AUTO_INCREMENT")
     sql = sql.replace("?", "%s")
-    # usage 是 MySQL 保留字，统一反引号（已反引号的保持不变；SQLite 同样接受反引号标识符）
     sql = re.sub(r"(?<!`)\busage\b(?!`)", "`usage`", sql)
     sql = sql.replace("last_insert_rowid()", "LAST_INSERT_ID()")
-    return sql
+    # 4) 放回字面量
+    return re.sub(r"\x00LIT(\d+)\x00", lambda m: literals[int(m.group(1))], sql)
 
 
 def _split_statements(sql):

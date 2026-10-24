@@ -29,8 +29,9 @@ bash scripts/deploy.sh upgrade
 - 未登录 `/api/me` → 401（API 不回登录页）
 - nginx `:8089` → 200
 - MySQL 核心表齐全（缺失数 = 0）
-- **端到端回归 41 项**：`scripts/e2e_verify.py` 用临时用户/家庭/账单真跑一遍
-  MCP 十个工具、家庭共享同等权限、网页用户管理 API、金额不变式，跑完自动清理
+- **端到端回归 48 项**：`scripts/e2e_verify.py` 用临时用户/家庭/账单真跑一遍
+  MCP 十个工具、家庭共享同等权限、网页用户管理 API、upsert 语义、金额不变式，
+  跑完自动清理
 
 手工复核时 curl **必须加 `--noproxy '*'`** —— 环境有 `HTTP_PROXY` 时，
 `curl 127.0.0.1:8099` 会把请求发给代理拿到 502，造成「服务挂了」的假象。

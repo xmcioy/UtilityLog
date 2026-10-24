@@ -7,7 +7,7 @@
 
 - 项目根目录：`{{PROJECT_ROOT}}`
 - 数据库：`{{PROJECT_ROOT}}/data/utility.db`
-- 站点目录：`{{PROJECT_ROOT}}/site`（nginx 服务端口见 INSTALL.md，公网域名 `{{PUBLIC_DOMAIN}}`）
+- 站点目录：`{{PROJECT_ROOT}}/site`（部署与 nginx 反代见 README 的「安装与部署」，公网域名 `{{PUBLIC_DOMAIN}}`）
 - 站点数据文件：`{{PROJECT_ROOT}}/site/data.js`
 - 截图目录：`{{PROJECT_ROOT}}/images/YYYY-MM/`（`site/images` 软链指向 `{{PROJECT_ROOT}}/images`）
 - 数据脚本：`{{PROJECT_ROOT}}/scripts/utility.py`
