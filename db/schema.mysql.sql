@@ -1,11 +1,12 @@
 -- ============================================================
 -- UtilityLog 数据库 Schema（MySQL）
--- 版本: 0.3.1
+-- 版本: 0.4.0
 -- 说明:
 --   - 与 db/schema.sql（SQLite 版）结构一致，方言为 MySQL 8 / MariaDB 兼容
---   - 建库与授权由部署步骤完成（utilitylog 库 + ul_app 低权限用户），本文件仅建表
---   - 使用方式（ul_app 用户在 utilitylog 库上执行）:
---       mysql -h127.0.0.1 -P9306 -uul_app -p utilitylog < db/schema.mysql.sql
+--   - 建库与授权由部署步骤完成（utilitylog 库 + 专用低权限用户），本文件仅建表
+--   - family_members 实现家庭共享（共享成员权限等同拥有者）
+--   - 使用方式（应用用户在 utilitylog 库上执行）:
+--       mysql -h<host> -P<port> -u<user> -p utilitylog < db/schema.mysql.sql
 -- ============================================================
 
 -- ------------------------------------------------------------
@@ -19,6 +20,10 @@ CREATE TABLE IF NOT EXISTS families (
     PRIMARY KEY (id),
     UNIQUE KEY uq_families_user_name (user_id, name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ------------------------------------------------------------
+-- 家庭成员表（家庭共享）定义见文件末尾（需 users 表先存在，外键依赖）
+-- ------------------------------------------------------------
 
 -- ------------------------------------------------------------
 -- 水费账单表
@@ -149,4 +154,25 @@ CREATE TABLE IF NOT EXISTS user_settings (
     model_name     VARCHAR(128),
     theme          VARCHAR(16) DEFAULT 'light',
     updated_at     VARCHAR(32)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ------------------------------------------------------------
+-- 家庭成员表（家庭共享）
+--
+-- 语义：families.user_id 是「拥有者」；本表额外记录被共享的成员。
+--       共享成员拥有与拥有者**同等**的管理权限 ——
+--       可查看、新增、修改、删除该家庭的账单。
+--
+-- role: owner（拥有者，建家庭时自动写入）/ member（被共享的成员）
+-- 位置说明：放在 users 之后，满足外键的被引用表需先存在。
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS family_members (
+    family_id  BIGINT NOT NULL,
+    user_id    BIGINT NOT NULL,
+    role       VARCHAR(16) NOT NULL DEFAULT 'member',
+    created_at DATETIME NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (family_id, user_id),
+    KEY idx_family_members_user (user_id),
+    CONSTRAINT fk_fm_family FOREIGN KEY (family_id) REFERENCES families(id) ON DELETE CASCADE,
+    CONSTRAINT fk_fm_user   FOREIGN KEY (user_id)   REFERENCES users(id)   ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

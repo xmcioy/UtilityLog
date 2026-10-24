@@ -1,9 +1,10 @@
 -- ============================================================
 -- UtilityLog 数据库 Schema（SQLite）
--- 版本: 0.3.1
+-- 版本: 0.4.0
 -- 说明:
 --   - 多用户（users / api_tokens / user_settings）已启用
 --   - families 与 bills_* 均带 user_id，数据按用户隔离
+--   - family_members 实现家庭共享：共享成员拥有与拥有者同等的管理权限
 --   - 双后端：SQLite（本文件）/ MySQL（schema.mysql.sql）语义等价
 -- ============================================================
 
@@ -21,6 +22,10 @@ CREATE TABLE IF NOT EXISTS families (
     created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
     UNIQUE(user_id, name)
 );
+
+-- ------------------------------------------------------------
+-- 家庭成员表（家庭共享）定义见文件末尾（与 MySQL 版顺序一致）
+-- ------------------------------------------------------------
 
 -- ------------------------------------------------------------
 -- 水费账单表
@@ -148,3 +153,23 @@ CREATE TABLE IF NOT EXISTS user_settings (
 
 -- 迁移说明：0.2 已为 families 与 bills_* 增加 user_id 列（正式 DDL 见上）
 -- 旧库升级请使用 db/migrations/migrate_multiuser.py（自动备份 + ALTER + 数据归属）
+
+-- ------------------------------------------------------------
+-- 家庭成员表（家庭共享）
+--
+-- 语义：families.user_id 是「拥有者」；本表额外记录被共享的成员。
+--       共享成员拥有与拥有者**同等**的管理权限 ——
+--       可查看、新增、修改、删除该家庭的账单。
+--
+-- role: owner（拥有者，建家庭时自动写入）/ member（被共享的成员）
+-- 位置说明：放在 users 之后，与 MySQL 版保持一致。
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS family_members (
+    family_id  INTEGER NOT NULL REFERENCES families(id) ON DELETE CASCADE,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role       TEXT NOT NULL DEFAULT 'member',
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    PRIMARY KEY (family_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_family_members_user ON family_members(user_id);

@@ -100,6 +100,9 @@ background:#fff;color:var(--txt);font-size:13px;cursor:pointer;}
 .logout-btn{background:rgba(255,255,255,.18);color:#fff;border:1px solid rgba(255,255,255,.35);
 border-radius:14px;padding:6px 14px;font-size:12px;cursor:pointer;transition:.2s;}
 .logout-btn:hover{background:rgba(255,255,255,.32);}
+.settings-btn{background:rgba(255,255,255,.18);color:#fff;border:1px solid rgba(255,255,255,.35);
+border-radius:14px;padding:6px 14px;font-size:12px;text-decoration:none;transition:.2s;}
+.settings-btn:hover{background:rgba(255,255,255,.32);}
 </style>
 </head>
 <body>
@@ -109,6 +112,7 @@ border-radius:14px;padding:6px 14px;font-size:12px;cursor:pointer;transition:.2s
   <div class="sub">每月用水 / 用电 / 燃气用量与费用记录</div>
   <div class="userbar">
     <span class="who" id="userBar">欢迎，<b id="curUser">-</b></span>
+    <a class="settings-btn" href="/settings.html">设置</a>
     <form action="/logout" method="post"><button class="logout-btn" type="submit">退出登录</button></form>
   </div>
   <div class="family-tabs" id="familyTabs"></div>

@@ -1,6 +1,6 @@
 # UtilityLog API 文档（API.md）
 
-> 版本：0.3.1（2026-10-24）
+> 版本：0.4.1（2026-10-24）
 > 基准实现：`auth_server.py`（认证网关，`ThreadingHTTPServer`，默认监听 `127.0.0.1:8099`）。
 > 本地访问经 nginx `:8089` 反代到 `:8099`；公网经 Cloudflare Tunnel 暴露。
 > 本文档与代码同步维护；路由或参数变更时必须同步更新。
@@ -35,10 +35,23 @@
 | POST | `/login` | 无需 | 用户名密码登录，成功种 Cookie 并 302 到 `/` |
 | POST | `/register` | 无需 | 注册新用户（PBKDF2 哈希入库），成功即自动登录 |
 | POST | `/logout` | 无需（读取 Cookie） | 吊销 token、清除 Cookie，302 到 `/login.html` |
+| POST | `/mcp` | 必须 | MCP Streamable HTTP 端点（JSON-RPC 2.0）。鉴权同上；推荐 `Authorization: Bearer <API Key>`。与前端共用 nginx `:8089` 端口 |
 | GET | `/data.js` | 必须 | 按当前登录用户动态导出数据（`window.UTILITY_DATA = {...};`） |
-| GET | `/`、`/index.html`、`/login.html`、其它静态 | 必须 | 已登录 → 返回 `site/` 下静态文件；未登录 → 页面类回登录页、资源类 401 |
+| GET | `/api/me` | 必须 | 当前登录用户信息 |
+| GET | `/api/tokens` | 必须 | API Key 列表（仅前缀）；**列表为空时自动签发一把并一次性返回明文** |
+| POST | `/api/tokens/reset` | 必须 | 重置 API Key，返回一次明文（旧 Key 立即失效） |
+| POST | `/api/password` | 必须 | 修改密码，成功后当前会话全部失效 |
+| GET | `/api/families` | 必须 | 可见家庭列表（含被共享的），标注 `can_manage_members` |
+| GET | `/api/families/{id}/members` | 必须 | 家庭成员列表（仅成员可见） |
+| POST | `/api/families/{id}/members` | 必须（仅拥有者） | 共享家庭给某用户（权限与拥有者等同） |
+| POST | `/api/families/{id}/members/remove` | 必须（仅拥有者） | 取消某用户对该家庭的共享 |
+| GET | `/api/users` | 必须 | 可共享的目标用户（仅用户名，不含凭据） |
+| GET | `/`、`/index.html`、`/login.html`、`/settings.html`、其它静态 | 必须 | 已登录 → 返回 `site/` 下静态文件；未登录 → 页面类回登录页、资源类 401 |
 
-> 注意：`POST /login|/register|/logout` 之外的 POST 一律 404；`GET /login|/register|/logout` 同样 404（避免方法混淆）。
+> `/api/*` 一律要求登录，未登录返回 **401 JSON**（不是登录页），便于脚本区分。
+
+> 注意：`POST /login|/register|/logout|/mcp` 之外的 POST 一律 404；`GET /login|/register|/logout` 同样 404（避免方法混淆）。
+> `GET /mcp` 返回 405（暂只支持 POST，不提供 SSE 流式响应）。
 
 ## 4. 接口详情
 
@@ -162,17 +175,94 @@ curl -u demo:secret123 http://127.0.0.1:8089/data.js
 - `.js` / `.json` / `.css` / 图片类 → `401` + `WWW-Authenticate: Basic realm="UtilityLog Private"`
 - 其它页面类 → `200` 返回 `login.html`（登录页本身无需登录）
 
+### 4.6 POST /mcp（MCP Streamable HTTP）
+
+MCP（Model Context Protocol）端点，复用 `scripts/mcp_server.py` 的全部 10 个工具
+（add_bill / list_bills / list_families / add_family / update_bill / delete_bill /
+share_family / unshare_family / list_members / get_summary），与前端共用 nginx `:8089`
+同一端口 —— 域名只需转发 8089 即可同时访问网页与 MCP。
+
+| 项 | 说明 |
+|---|---|
+| 传输 | Streamable HTTP（JSON-RPC 2.0 over POST），不支持 SSE |
+| 鉴权 | 与普通 API 一致（Cookie / Bearer / Basic）；推荐 Bearer **API Key**（网页「设置」中重置获取，`scope='api'` 不过期） |
+| 请求体 | 单条 JSON-RPC 消息或 batch 数组，上限 1MB |
+| 成功响应 | `200` + JSON-RPC 响应（batch 返回数组）；纯通知（无 `id`）返回 `202` 无响应体 |
+| 错误响应 | 未鉴权 `401`；body 超限 `413`；JSON 解析失败 `400` + `-32700`；未知方法/工具 `-32601` |
+| 安全约束 | 工具参数中的 `user` 字段会被**已认证用户强制覆盖**，HTTP 通道无法冒充他人操作 |
+
+MCP 客户端配置示例（远程，走域名）：
+
+```json
+{
+  "mcpServers": {
+    "utilitylog": {
+      "url": "https://<your-domain>/mcp",
+      "headers": { "Authorization": "Bearer <API Key>" }
+    }
+  }
+}
+```
+
+本地 stdio 配置（不经 HTTP，直接跑 `scripts/mcp_server.py`）仍然可用，见该文件头部说明。
+
+curl 示例：
+
+```bash
+curl -s -X POST http://127.0.0.1:8089/mcp \
+  -H "Authorization: Bearer <API Key>" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
+
+### 4.7 用户管理与家庭共享（`/api/*`）
+
+全部要求已登录（Cookie / Bearer / Basic 三通道任一），响应一律 JSON。
+
+**GET `/api/me`** → `{"ok":true,"user":{"id":..,"username":..,"display_name":..,"created_at":..}}`
+
+**GET `/api/tokens`** → Key 列表（只含前缀与创建时间）。
+
+```json
+{"ok": true, "tokens": [{"id": 1, "prefix": "a1b2c3d4", "created_at": "..."}],
+ "one_time_plaintext": null}
+```
+
+> 列表为空时（例如刚注册的用户）会自动签发一把，并把明文放在 `one_time_plaintext`
+> 随这次响应一并返回 —— 明文只出现这一次，后续访问该字段恒为 `null`。
+
+**POST `/api/tokens/reset`** → `{"ok":true,"token":"<明文>"}`，旧 Key 立即失效。
+
+**POST `/api/password`**（表单 `old` / `new`）→ 成功后当前会话与 API Key 全部失效，并清除 Cookie。
+
+**GET `/api/families`** → 可见家庭（自己拥有的 + 别人共享给他的），每项带 `role` 与
+`can_manage_members`（仅 owner 为 `true`）。
+
+**GET `/api/families/{id}/members`** → `[{"user_id":..,"username":..,"role":"owner|member"}]`，
+非成员返回 404。
+
+**POST `/api/families/{id}/members`**（表单 `username`）→ 共享家庭。**仅拥有者**可操作，
+被共享者获得与拥有者等同的权限（可读、可写、可删）。
+
+**POST `/api/families/{id}/members/remove`**（表单 `username`）→ 取消共享，仅拥有者可操作。
+
+**GET `/api/users`** → 供共享时选择目标用户，只暴露用户名，不含任何凭据。
+
 ## 5. 错误响应汇总
 
 | 状态码 | 场景 |
 |---|---|
 | 302 | 登录 / 注册 / 退出成功或失败的跳转（携带 `Location` 与 `Set-Cookie`） |
-| 401 | 未登录访问需鉴权资源（/data.js、脚本、图片、CSS、JSON） |
-| 404 | 未知路由（POST 非三接口、GET /login 等）、静态文件不存在、路径穿越被拦截 |
+| 401 | 未登录访问需鉴权资源（/data.js、/mcp、/api/*、脚本、图片、CSS、JSON） |
+| 404 | 未知路由（POST 非四接口、GET /login 等）、静态文件不存在、路径穿越被拦截、非成员访问成员表 |
+| 405 | `GET /mcp`（只支持 POST） |
+| 413 | 请求体超限（/mcp 上限 1MB） |
 
 ## 6. 部署与服务
 
 - 启动：`python3 auth_server.py`（默认 `127.0.0.1:8099`，启动时 `ensure_auth_tables()` 幂等建 auth 三表）
 - 后端切换：环境变量 `UL_BACKEND=mysql`（读取运行目录 `db_config.json`）或 `sqlite`（默认）
 - 路径：静态模板取源码 `site/`；运行数据（`data/`、`db_config.json`、日志）取运行目录（`UL_APP_DIR` > `UL_ROOT` > 仓库根）
-- launchd 托管示例见 `scripts/deploy.sh`（0.3.1 起），nginx 反代见 INSTALL.md
+- 部署 / 升级：`bash scripts/deploy.sh install | upgrade`（0.4.1 起升级末尾自动跑 `scripts/e2e_verify.py`
+  端到端回归，未通过即判定该版本不可发布）
+- launchd 托管见 `scripts/deploy.sh`（无 GUI 会话上下文时自动回退独立进程），nginx 反代见 INSTALL.md

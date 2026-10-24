@@ -55,7 +55,7 @@
 
 1. **获取**：用户发来水费账单截图（微信/支付宝缴费单、水务短信截图等）→ 保存原图到 `{{PROJECT_ROOT}}/images/<YYYY-MM>/`。
 2. **解析**：用视觉/OCR 读取：账期月份、上期/本期读数、本期用量（m³）、应缴金额、账单日期。上海居民阶梯水价（推算用）：年用量 ≤220m³ 第一档（水费2.25+污水2.00×0.9=4.05元/m³）；220~300m³ 第二档（水费4.00+污水2.00×0.9=5.80元/m³）；>300m³ 第三档（水费6.99+污水2.00×0.9=8.79元/m³）。**污水费按用水量90%计收**（污水费=用量×90%×2.00），综合单价=水费单价+污水单价×0.9。账单未印阶梯时按年累计用量推算当前档位，备注注明"账单未印阶梯，按上海居民阶梯水价推算"。
-3. **入库**：`utility.py add --type water` 写入 `bills_water` 表：prev_reading/cur_reading/usage/amount/water_unit_price(`--water-unit-price`)/sewage_unit_price(`--sewage-unit-price`；兼容旧参数 `--sewage-price`)/current_tier/tier_remaining/year_usage/tier_detail，并**必须**同时写入分项金额 `water_fee`（水费金额=用量×水费单价）与 `sewage_fee`（污水费金额=用量×污水计费比例×污水单价）。三端（数据库/网页/腾讯文档表格）各自独立记录这两个分项；`amount`=water_fee+sewage_fee。
+3. **入库**：经 MCP `add_bill`（或 CLI `utility.py add --type water`）写入 `bills_water` 表：prev_reading/cur_reading/usage/amount/water_unit_price(`--water-unit-price`)/sewage_unit_price(`--sewage-unit-price`；兼容旧参数 `--sewage-price`)/current_tier/tier_remaining/year_usage/tier_detail，并**必须**同时写入分项金额 `water_fee`（水费金额=用量×水费单价）与 `sewage_fee`（污水费金额=用量×污水计费比例×污水单价）。三端（数据库/网页/腾讯文档表格）各自独立记录这两个分项；`amount`=water_fee+sewage_fee。
 4. **同步**：`sync_site.py` → 腾讯文档表格覆盖式写入（含第 25 列水费金额、第 26 列污水费金额）。
 
 ## 二、电费获取与处理方式
@@ -70,22 +70,59 @@
    - 单价兼容两种文本格式（名称在前 `居民分时,电压220V(平)电度电费 11 0.6170 6.79`，数字在前 `193 0.6170 119.08\n电_居民生活_居民分时(平)电度电费`），双正则兜底；
    - 费用取"本月应付电费"（amount=峰电费+谷电费合计）；"抵扣往月预存电费/本月实付电费"写入备注。
 3. **上海居民阶梯电价（推算用）**：年用量 ≤3120kWh 第一档（峰0.617/谷0.307）；3120~4800kWh 第二档（峰0.677/谷0.337）；>4800kWh 第三档（峰0.977/谷0.487）。按年累计用量判断当前档位与本档剩余。
-4. **入库+同步**：`utility.py add --type electric` 写入 `bills_electric` 表（峰谷四列、peak_usage/peak_price/valley_usage/valley_price、unit_price、amount）；表格写入时峰谷上期/本期四列必须分开填。
+4. **入库+同步**：经 MCP `add_bill`（或 CLI `utility.py add --type electric`）写入 `bills_electric` 表（峰谷四列、peak_usage/peak_price/valley_usage/valley_price、unit_price、amount）；表格写入时峰谷上期/本期四列必须分开填。
 
 ## 三、燃气费获取与处理方式
 
 1. **获取（邮箱）**：用户提供邮箱（如 `{{EMAIL}}`），燃气账单由燃气公司平台发送到邮箱。用 browser agent 登录邮箱收件箱，搜索燃气账单邮件（主题含"燃气"/"账单"），提取 PDF 链接。
 2. **下载**：将每封邮件的 PDF 链接 curl 下载到 `{{PROJECT_ROOT}}/temp_gas/gas_YYYY-MM.pdf`（200 校验），PDF 文本解析字段：户名、地址、户号、上期/本期读数、本期用量、单价、金额、结算周期、**年累计用量与阶梯剩余**（文本如"310-已达=剩余"）。
 3. **上传腾讯文档燃气文件夹（用户强调）**：将 PDF 上传到燃气文件夹 `{{TENCENT_DOC_FOLDER_GAS}}`，命名格式**必须含地址**：`YYYYMM 账单-<地址>`。
-4. **入库+同步**：`utility.py add --type gas` 写入 `bills_gas` 表（prev_reading/cur_reading/usage/unit_price/amount）。燃气档位：年 ≤310m³ 第一档（3.00元/m³）；310~520m³ 第二档（3.30元/m³）；>520m³ 第三档（4.20元/m³）。账单文本含"第一阶梯"字样时直接采用，剩余量=310-年累计。
+4. **入库+同步**：经 MCP `add_bill`（或 CLI `utility.py add --type gas`）写入 `bills_gas` 表（prev_reading/cur_reading/usage/unit_price/amount）。燃气档位：年 ≤310m³ 第一档（3.00元/m³）；310~520m³ 第二档（3.30元/m³）；>520m³ 第三档（4.20元/m³）。账单文本含"第一阶梯"字样时直接采用，剩余量=310-年累计。
 5. **标记防重复**：已上传且已录入的 PDF 以"YYYYMM 账单-地址.pdf"标题为已处理标记，下次自动跳过。
+
+## 录入入口：MCP 服务（首选）
+
+技能的账单写入一律通过 MCP 服务完成，不要直接拼命令行：
+
+- MCP 服务名：`utilitylog`（与网页接口共用同一份工具实现 `scripts/mcp_server.py`）
+- 录入工具：`add_bill`，必填 `family` `month` `type` `usage` `amount`
+- 其它工具：`update_bill` `delete_bill` `list_bills` `get_summary`
+  `list_families` `add_family` `share_family` `unshare_family` `list_members`
+- 阶梯四件套必录：`current_tier` `tier_remaining` `year_usage` `tier_detail`
+- 水费必带分项 `water_fee` + `sewage_fee`，且 `amount` 必须等于两者之和
+- 电费必带峰谷四示数（`peak_prev_reading` / `peak_cur_reading` /
+  `valley_prev_reading` / `valley_cur_reading`）与峰谷电量电价
+- `user` 省略则用 MCP 服务配置里的默认用户
+
+本机配置（写入 `~/.workbuddy/mcp.json`；stdio 直连数据库，不依赖 Web 服务）：
+
+```json
+{"mcpServers": {"utilitylog": {
+  "command": "/usr/bin/python3",
+  "args": ["{{APP_DIR}}/scripts/mcp_server.py"],
+  "env": {"UL_APP_DIR": "{{APP_DIR}}", "UL_BACKEND": "mysql", "UL_USER": "{{USER}}"}}}}
+```
+
+远程 / 多端可改用 HTTP（同一套工具，需 API Key）：
+
+```json
+{"mcpServers": {"utilitylog": {
+  "url": "https://{{PUBLIC_DOMAIN}}/mcp",
+  "headers": {"Authorization": "Bearer {{API_KEY}}"}}}}
+```
+
+> API Key 在网页「设置」里重置获得，**重置后旧 Key 立即失效**。
+
+CLI 仅作为 MCP 不可用时的备用入口（参数与 MCP 工具一一对应）：
+`utility.py --user {{USER}} add --family ... --month ... --type water ...`
 
 ## 通用录入流程（用户发来账单截图时）
 
 1. 解析截图字段（缺项不编造，备注注明缺失项）。
 2. 确认家庭：明示→用明示；未明示多家庭→ask_user 单选；单家庭→直接用；无家庭→自动创建。
 3. 保存截图（必须）：压缩到 ≤1280px、JPEG ≤80、≤300KB；HEIC 先转 JPEG。
-4. `utility.py add --type <water|electric|gas>` 写入本地库对应费种表（含峰谷/档位/分项字段）。
+4. 调用 MCP `add_bill` 写入本地库对应费种表（含峰谷/档位/分项字段）；
+   MCP 不可用时退回 `utility.py add --type <water|electric|gas>`。
 5. `sync_site.py` 同步网站并验证三处（本地 data.js → 本地服务 → 公网域名 data.js?v=版本号）。
 6. 腾讯文档表格覆盖式更新（键=家庭+月份+类型）。
 7. 回复摘要：家庭、月份、类型、用量、费用（总价及分项）、当前档位、本档剩余、截图链接、网站地址、表格链接。
@@ -98,8 +135,9 @@
 
 ## 查询与统计
 
-- 单条查询：`utility.py list --family <名> --month <YYYY-MM> --type <water|electric|gas>`。
+- 单条查询：MCP `list_bills`（`family` / `month` / `type` 均可省略）；或 CLI `utility.py list --family <名> --month <YYYY-MM> --type <water|electric|gas>`。
 - 统计：近 N 月水/电/气用量与费用，环比增减；按年汇总；多家庭按家庭分别汇总勿混算。
+- 年度/多家庭汇总：MCP `get_summary`（传 `year` 与可选 `family`）。
 - 全量导出 `utility.py dump` 走三表 UNION，统一键名输出（非本费种字段为 null）。
 
 ## 用户强调点（必须遵守）

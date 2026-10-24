@@ -15,7 +15,7 @@ UtilityLog is a self-hosted utility bill (water / electricity / gas) tracker for
 - **AI 技能录入**：截图 / PDF 账单 → 视觉解析 → 本地 SQLite → 网页同步 → 腾讯文档表格覆盖式同步
 - **双后端存储（0.3）**：SQLite 默认零依赖，可切换 MySQL 8+（专属低权限用户，权限隔离）
 - **源码 / 运行分离（0.3）**：仓库仅代码 / 模板 / 文档 / 脱敏示例，真实配置与数据落运行目录（UL_APP_DIR），gitignore 不入库
-- **一键部署 / 升级（0.3.1）**：`scripts/deploy.sh install|upgrade` 自动完成 MySQL 建库建表、源码同步、launchd 服务配置与验证，数据 / 程序分离，升级保留运行数据与凭据
+- **一键部署 / 升级（0.4.1）**：`scripts/deploy.sh install|upgrade` 自动完成 MySQL 建库建表、源码同步、launchd 服务配置与验证，数据 / 程序分离，升级保留运行数据与凭据
 - **数据三端同步**：本地数据库（source of truth）→ 静态站点 data.js → 腾讯文档在线表格
 - **隐私友好**：本地私有数据（数据库、截图、token、配置）全部 gitignore，开源仓库零敏感信息
 

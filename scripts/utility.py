@@ -113,32 +113,198 @@ def register_user(username, password, display_name=None):
 
 
 def add_family(name, user):
+    """新建家庭。创建者自动成为 owner（写入 family_members）。
+
+    返回 (family_id, created)。created=False 表示同名家庭已存在。
+    """
     uid = require_user(user, "add-family")
     conn = get_conn()
     try:
+        # 幂等：同一用户名下同名家庭只建一次
+        row = conn.execute(
+            "SELECT id FROM families WHERE name=? AND user_id=?", (name, uid)).fetchone()
+        if row is not None:
+            fid = row["id"]
+            print(f"family already exists: {name} (id={fid})")
+            return fid, False
         cur = conn.execute("INSERT INTO families(name, user_id) VALUES (?,?)", (name, uid))
+        fid = cur.lastrowid
+        # 拥有者也写入 family_members，便于统一用 family_id JOIN 判权限
+        conn.execute(
+            "INSERT INTO family_members(family_id, user_id, role) VALUES (?,?,?)"
+            " ON DUPLICATE KEY UPDATE role=role"
+            if db_backend.get_backend() == "mysql" else
+            "INSERT OR IGNORE INTO family_members(family_id, user_id, role) VALUES (?,?,?)",
+            (fid, uid, "owner"))
         conn.commit()
-        print(f"family added: {name} (id={cur.lastrowid}, user={user})")
-    except Exception:
-        print(f"family already exists: {name}")
+        print(f"family added: {name} (id={fid}, user={user})")
+        return fid, True
     finally:
         conn.close()
 
 
+def visible_family_ids(user):
+    """该用户可见的全部家庭 id（自己拥有的 + 别人共享给他的）。
+
+    共享语义：family_members 中有记录即可见，且权限与拥有者等同。
+    """
+    uid = user_id_by_name(user)
+    if uid is None:
+        return []
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT DISTINCT f.id FROM families f "
+            "LEFT JOIN family_members m ON m.family_id = f.id "
+            "WHERE f.user_id = ? OR m.user_id = ? ORDER BY f.id",
+            (uid, uid)).fetchall()
+        return [r["id"] for r in rows]
+    finally:
+        conn.close()
+
+
+def owned_family_ids(user):
+    """该用户「拥有」的家庭 id（用于共享管理权限：只有拥有者能增删成员）"""
+    uid = user_id_by_name(user)
+    if uid is None:
+        return []
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT id FROM families WHERE user_id=? ORDER BY id", (uid,)).fetchall()
+        return [r["id"] for r in rows]
+    finally:
+        conn.close()
+
+
+def _in_clause(ids):
+    """生成 IN 占位符与参数；空列表时返回永假条件"""
+    if not ids:
+        return "(NULL)", []
+    return "(" + ",".join("?" * len(ids)) + ")", list(ids)
+
+
 def list_families(user):
+    """列出该用户可见的家庭，附带 role（owner / member）与拥有者名。"""
     uid = require_user(user, "list-families")
     conn = get_conn()
-    rows = conn.execute("SELECT id, name, user_id FROM families WHERE user_id=? ORDER BY id", (uid,)).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    try:
+        rows = conn.execute(
+            "SELECT f.id, f.name, f.user_id, "
+            "       COALESCE(m.role, CASE WHEN f.user_id = ? THEN 'owner' ELSE 'member' END) AS role, "
+            "       u.username AS owner "
+            "FROM families f "
+            "LEFT JOIN family_members m ON m.family_id = f.id AND m.user_id = ? "
+            "LEFT JOIN users u ON u.id = f.user_id "
+            "WHERE f.user_id = ? OR m.user_id = ? "
+            "ORDER BY f.id",
+            (uid, uid, uid, uid)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
 
 
 def family_id_by_name(name, user):
+    """按家庭名查 id，范围限于该用户**可见**的家庭（含被共享的）。
+
+    同一用户可能同时拥有和被共享同名家庭，此时优先返回自己拥有的那个。
+    """
     uid = require_user(user, "family lookup")
     conn = get_conn()
-    row = conn.execute("SELECT id FROM families WHERE name=? AND user_id=?", (name, uid)).fetchone()
-    conn.close()
-    return row["id"] if row else None
+    try:
+        row = conn.execute(
+            "SELECT f.id FROM families f "
+            "LEFT JOIN family_members m ON m.family_id = f.id "
+            "WHERE f.name = ? AND (f.user_id = ? OR m.user_id = ?) "
+            "ORDER BY CASE WHEN f.user_id = ? THEN 0 ELSE 1 END, f.id LIMIT 1",
+            (name, uid, uid, uid)).fetchone()
+        return row["id"] if row else None
+    finally:
+        conn.close()
+
+
+# ---------------- 家庭共享管理 ----------------
+
+def share_family(family_id, to_user, by_user=None):
+    """把家庭共享给另一个用户（同等管理权限）。仅拥有者可操作。
+
+    返回 (ok, message)。
+    """
+    uid = require_user(by_user, "share-family")
+    target = user_id_by_name(to_user)
+    if target is None:
+        return False, f"目标用户不存在: {to_user}"
+    if target == uid:
+        return False, "不能共享给自己"
+    conn = get_conn()
+    try:
+        fam = conn.execute(
+            "SELECT id, name, user_id FROM families WHERE id=?", (family_id,)).fetchone()
+        if fam is None:
+            return False, f"家庭不存在: id={family_id}"
+        if fam["user_id"] != uid:
+            return False, "只有家庭拥有者可以共享该家庭"
+        exists = conn.execute(
+            "SELECT 1 FROM family_members WHERE family_id=? AND user_id=?",
+            (family_id, target)).fetchone()
+        if exists:
+            return False, f"该家庭已共享给 {to_user}"
+        conn.execute(
+            "INSERT INTO family_members(family_id, user_id, role) VALUES (?,?,?)",
+            (family_id, target, "member"))
+        conn.commit()
+        return True, f"已将「{fam['name']}」共享给 {to_user}（同等管理权限）"
+    finally:
+        conn.close()
+
+
+def unshare_family(family_id, from_user, by_user=None):
+    """取消共享。仅拥有者可操作；不能移除拥有者自己。"""
+    uid = require_user(by_user, "unshare-family")
+    target = user_id_by_name(from_user)
+    if target is None:
+        return False, f"目标用户不存在: {from_user}"
+    conn = get_conn()
+    try:
+        fam = conn.execute(
+            "SELECT id, name, user_id FROM families WHERE id=?", (family_id,)).fetchone()
+        if fam is None:
+            return False, f"家庭不存在: id={family_id}"
+        if fam["user_id"] != uid:
+            return False, "只有家庭拥有者可以取消共享"
+        if fam["user_id"] == target:
+            return False, "不能移除家庭拥有者"
+        cur = conn.execute(
+            "DELETE FROM family_members WHERE family_id=? AND user_id=?",
+            (family_id, target))
+        conn.commit()
+        if cur.rowcount == 0:
+            return False, f"该家庭未共享给 {from_user}"
+        return True, f"已取消 {from_user} 对「{fam['name']}」的共享"
+    finally:
+        conn.close()
+
+
+def list_family_members(family_id, by_user=None):
+    """列出家庭成员（含拥有者）。仅家庭成员可见。"""
+    uid = require_user(by_user, "list-members")
+    conn = get_conn()
+    try:
+        # 成员身份校验
+        ok = conn.execute(
+            "SELECT 1 FROM families f LEFT JOIN family_members m ON m.family_id=f.id "
+            "WHERE f.id=? AND (f.user_id=? OR m.user_id=?)",
+            (family_id, uid, uid)).fetchone()
+        if ok is None:
+            return []
+        rows = conn.execute(
+            "SELECT m.user_id, u.username, m.role, m.created_at "
+            "FROM family_members m JOIN users u ON u.id = m.user_id "
+            "WHERE m.family_id=? ORDER BY CASE m.role WHEN 'owner' THEN 0 ELSE 1 END, m.user_id",
+            (family_id,)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
 
 
 def list_users():
@@ -180,10 +346,16 @@ def find_bill_table(bid, user=None, btype=None):
     同时存在于多张表（如三表都有 id=1）。此时必须由调用方传 btype 消歧，
     否则会命中错误的表（曾导致 delete/update 误伤其他费种的账单）。
     多表命中且未指定 btype 时返回 (None, None) 并由调用方报错提示。
+
+    权限：传入 user 时按「该用户可见的家庭」过滤（含被共享的家庭），
+    而非按账单的录入者 —— 共享家庭里任何成员的账单，其他成员都能看到并管理。
     """
     conn = get_conn()
     try:
-        uid = user_id_by_name(user) if user else None
+        fam_ids = visible_family_ids(user) if user else None
+        if user and not fam_ids:
+            return None, None
+        in_sql, in_args = _in_clause(fam_ids) if fam_ids is not None else ("", [])
         types = (btype,) if btype else VALID_TYPES
         hits = []
         for t in types:
@@ -191,8 +363,9 @@ def find_bill_table(bid, user=None, btype=None):
                 continue
             table = TABLE_BY_TYPE[t]
             if user:
-                row = conn.execute(f"SELECT * FROM {table} WHERE id=? AND user_id=?",
-                                   (bid, uid)).fetchone()
+                row = conn.execute(
+                    f"SELECT * FROM {table} WHERE id=? AND family_id IN {in_sql}",
+                    [bid] + in_args).fetchone()
             else:
                 row = conn.execute(f"SELECT * FROM {table} WHERE id=?", (bid,)).fetchone()
             if row is not None:
@@ -229,6 +402,26 @@ def _norm_tier_detail(v):
     return json.dumps(v, ensure_ascii=False)
 
 
+def family_name_exists_elsewhere(name, user):
+    """判断是否存在同名家庭，但当前用户不可见（即未共享给他）。
+
+    用于避免「以为在写共享家庭，实际静默建了同名新家庭」的误操作。
+    """
+    uid = user_id_by_name(user)
+    if uid is None:
+        return False
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM families f "
+            "LEFT JOIN family_members m ON m.family_id = f.id AND m.user_id = ? "
+            "WHERE f.name = ? AND f.user_id <> ? AND m.user_id IS NULL LIMIT 1",
+            (uid, name, uid)).fetchone()
+        return row is not None
+    finally:
+        conn.close()
+
+
 def add_bill(family, month, btype, usage, amount, user=None, bill_date=None, image=None, note=None,
              prev_reading=None, cur_reading=None, unit_price=None,
              water_unit_price=None, sewage_unit_price=None,
@@ -241,6 +434,12 @@ def add_bill(family, month, btype, usage, amount, user=None, bill_date=None, ima
     uid = require_user(user, "add")
     fid = family_id_by_name(family, user)
     if fid is None:
+        # 存在同名家庭但未共享给当前用户 → 大概率是想写共享家庭，明确报错而非
+        # 静默新建同名家庭（否则用户会以为写进了共享家庭，实际是孤立的新家庭）
+        if family_name_exists_elsewhere(family, user):
+            print(f"error: 家庭「{family}」属于其他用户且未共享给你。"
+                  f"请让拥有者共享（share-family），或换一个家庭名。")
+            sys.exit(1)
         add_family(family, user)
         fid = family_id_by_name(family, user)
     if btype not in VALID_TYPES:
@@ -301,6 +500,11 @@ def add_bill(family, month, btype, usage, amount, user=None, bill_date=None, ima
 
 
 def update_bill(bid, user=None, btype=None, **fields):
+    """修改账单字段。返回 True 表示成功，False 表示未改动（不存在/歧义/无字段）。
+
+    返回值供 MCP 层与脚本判断真实结果 —— 早期版本只 print 不返回，
+    导致上层无法区分「成功」与「静默失败」（假成功）。
+    """
     # 兼容旧参数名
     if "sewage_price" in fields and fields.get("sewage_unit_price") is None:
         fields["sewage_unit_price"] = fields.pop("sewage_price")
@@ -323,7 +527,7 @@ def update_bill(bid, user=None, btype=None, **fields):
                   f"请用 --type 指定：--type {hits[0]}")
         else:
             print(f"bill {bid} not found (or not owned by user '{user}')")
-        return
+        return False
     btype = "water" if table == "bills_water" else ("electric" if table == "bills_electric" else "gas")
     allowed = set(TABLE_FIELDS[btype]) | {"bill_month"}
     sets = []
@@ -338,19 +542,30 @@ def update_bill(bid, user=None, btype=None, **fields):
             vals.append(v)
     if not sets:
         print("no fields to update")
-        return
+        return False
+    fam_ids = visible_family_ids(user)
+    if not fam_ids:
+        print(f"bill {bid} not found (or not accessible by user '{user}')")
+        return False
+    in_sql, in_args = _in_clause(fam_ids)
     conn = get_conn()
-    cur = conn.execute(f"UPDATE {table} SET {', '.join(sets)} WHERE id=? AND user_id=?",
-                       vals + [bid, uid])
+    cur = conn.execute(
+        f"UPDATE {table} SET {', '.join(sets)} WHERE id=? AND family_id IN {in_sql}",
+        vals + [bid] + in_args)
     conn.commit()
     conn.close()
     if cur.rowcount == 0:
-        print(f"bill {bid} not found or not owned by user '{user}'")
-        return
+        print(f"bill {bid} not found or not accessible by user '{user}'")
+        return False
     print(f"bill {bid} updated ({btype}) by {user}")
+    return True
 
 
 def delete_bill(bid, user=None, btype=None):
+    """删除账单。返回 True 表示已删除，False 表示未删除（不存在/歧义）。
+
+    返回值供 MCP 层判断真实结果 —— 只有 print 的话上层会误判为成功。
+    """
     # 校验操作者存在，避免 user_id=NULL 导致静默无操作
     uid = require_user(user, "delete")
     table, row = find_bill_table(bid, user, btype)
@@ -361,28 +576,40 @@ def delete_bill(bid, user=None, btype=None):
                   f"请用 --type 指定：--type {hits[0]}")
         else:
             print(f"bill {bid} not found (or not owned by user '{user}')")
-        return
+        return False
+    fam_ids = visible_family_ids(user)
+    if not fam_ids:
+        print(f"bill {bid} not found (or not accessible by user '{user}')")
+        return False
+    in_sql, in_args = _in_clause(fam_ids)
     conn = get_conn()
-    cur = conn.execute(f"DELETE FROM {table} WHERE id=? AND user_id=?", (bid, uid))
+    cur = conn.execute(
+        f"DELETE FROM {table} WHERE id=? AND family_id IN {in_sql}",
+        [bid] + in_args)
     conn.commit()
     conn.close()
     if cur.rowcount == 0:
-        print(f"bill {bid} not found or not owned by user '{user}'")
-        return
+        print(f"bill {bid} not found or not accessible by user '{user}'")
+        return False
     print(f"bill {bid} deleted ({table}) by {user}")
+    return True
 
 
 def _bill_type_candidates(bid, user=None):
     """返回该 id 命中的所有费种表名（用于 id 跨表冲突时提示消歧）"""
     conn = get_conn()
     try:
-        uid = user_id_by_name(user) if user else None
+        fam_ids = visible_family_ids(user) if user else None
+        if user and not fam_ids:
+            return []
+        in_sql, in_args = _in_clause(fam_ids) if fam_ids is not None else ("", [])
         hits = []
         for t in VALID_TYPES:
             table = TABLE_BY_TYPE[t]
             if user:
-                row = conn.execute(f"SELECT 1 FROM {table} WHERE id=? AND user_id=?",
-                                   (bid, uid)).fetchone()
+                row = conn.execute(
+                    f"SELECT 1 FROM {table} WHERE id=? AND family_id IN {in_sql}",
+                    [bid] + in_args).fetchone()
             else:
                 row = conn.execute(f"SELECT 1 FROM {table} WHERE id=?", (bid,)).fetchone()
             if row is not None:
@@ -434,14 +661,20 @@ UNION_COLS = """
 
 
 def query_bills(user, where="", args=(), order="month DESC, type, id DESC"):
-    uid = user_id_by_name(user)
-    if uid is None:
+    """查询该用户可见的全部账单（自己家庭的 + 被共享家庭的）。
+
+    过滤依据是 family_id ∈ 可见家庭，而不是账单的 user_id ——
+    共享家庭里别的成员录入的账单，我也应该看到并能管理。
+    """
+    fam_ids = visible_family_ids(user)
+    if not fam_ids:
         return []
     conn = get_conn()
-    # 外层只能引用 UNION 输出列（user_id），不能引用内层表别名
-    sql = (f"SELECT * FROM ({UNION_COLS}) AS u WHERE user_id=? {where} "
+    in_sql, in_args = _in_clause(fam_ids)
+    # 外层只能引用 UNION 输出列，不能引用内层表别名
+    sql = (f"SELECT * FROM ({UNION_COLS}) AS u WHERE family_id IN {in_sql} {where} "
            f"ORDER BY {order}")
-    rows = conn.execute(sql, [uid] + list(args)).fetchall()
+    rows = conn.execute(sql, in_args + list(args)).fetchall()
     conn.close()
     # MySQL DATETIME 返回 datetime 对象，统一转 ISO 字符串保证 JSON 可序列化
     out = []
@@ -469,16 +702,25 @@ def list_bills(user, family=None, month=None, btype=None):
 
 
 def dump_json(user):
-    """输出指定用户的完整数据（供 sync_site.py / auth_server.py 使用）"""
+    """输出指定用户可见的完整数据（供 sync_site.py / auth_server.py 使用）
+
+    含自己拥有的家庭与被共享的家庭；账单范围同 query_bills。
+    """
     uid = user_id_by_name(user)
     if uid is None:
         return {"families": [], "bills": []}
-    conn = get_conn()
-    families = [dict(r) for r in conn.execute(
-        "SELECT id, name FROM families WHERE user_id=? ORDER BY id", (uid,)).fetchall()]
     bills = query_bills(user, order="month, type, id")
-    conn.close()
+    families = [{k: f[k] for k in ("id", "name", "role") if k in f}
+                for f in list_families(user)]
     return {"user": {"id": uid, "username": user}, "families": families, "bills": bills}
+
+
+def _print_result(result):
+    """打印 (ok, message) 形式的操作结果，失败时以非零码退出（供脚本判断）"""
+    ok, msg = result
+    print(msg)
+    if not ok:
+        sys.exit(1)
 
 
 def main():
@@ -500,6 +742,27 @@ def main():
     p_fa = sub.add_parser("add-family")
     p_fa.add_argument("name")
     p_fa.set_defaults(func=lambda a: add_family(a.name, a.user))
+
+    p_lf = sub.add_parser("list-families", help="列出可见家庭（含被共享的）")
+    p_lf.set_defaults(func=lambda a: print(json.dumps(
+        list_families(a.user), ensure_ascii=False, indent=2)))
+
+    p_sh = sub.add_parser("share-family", help="把家庭共享给其他用户（同等管理权限）")
+    p_sh.add_argument("family_id", type=int)
+    p_sh.add_argument("to_user")
+    p_sh.set_defaults(func=lambda a: _print_result(
+        share_family(a.family_id, a.to_user, a.user)))
+
+    p_ush = sub.add_parser("unshare-family", help="取消某用户对该家庭的共享")
+    p_ush.add_argument("family_id", type=int)
+    p_ush.add_argument("from_user")
+    p_ush.set_defaults(func=lambda a: _print_result(
+        unshare_family(a.family_id, a.from_user, a.user)))
+
+    p_lm = sub.add_parser("list-members", help="列出家庭成员")
+    p_lm.add_argument("family_id", type=int)
+    p_lm.set_defaults(func=lambda a: print(json.dumps(
+        list_family_members(a.family_id, a.user), ensure_ascii=False, indent=2)))
 
     p_add = sub.add_parser("add")
     p_add.add_argument("--family", required=True, help="家庭名")

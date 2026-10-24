@@ -14,8 +14,9 @@ site/data.js
 # .agent-sync/ 存放 agent 间的变更登记、状态板与协作公约，
 # 含内部代号、任务分工等信息，仅供本机多 agent 协作使用。
 .agent-sync/
-# AGENTS.md 含本机协作路径，不入库
-AGENTS.md
+# ⚠️ 只忽略协作区内部文件；根目录 AGENTS.md 是给新人/新 agent 看的公开指路牌，
+# 内容一律用 $HOME 与占位符（无本机路径、无用户名），必须随仓库发布。
+.agent-sync/AGENTS.md
 # WorkBuddy 本地记忆与工作区状态
 .workbuddy/
 

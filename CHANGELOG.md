@@ -4,6 +4,50 @@ All notable changes to this project will be documented in this file.
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.4.1] - 2026-10-24
+
+### 新增
+- **MCP Streamable HTTP 端点 `POST /mcp`**：MCP 与前端共用 nginx `:8089` 同一端口，公网域名只需转发 8089 即可同时访问网页与 MCP 接口（此前 MCP 仅有 stdio 本地传输，域名无法访问）
+  - 复用 `scripts/mcp_server.py` 全部 10 个工具与实现，工具清单单一来源
+  - 鉴权复用 auth_server 三通道（Cookie / Bearer / Basic），远程推荐 Bearer API Key（网页「设置」重置获取）
+  - 支持 JSON-RPC batch 与纯通知（`202 Accepted`）；`GET /mcp` 返回 405
+  - `deploy.sh verify` 增加 `/mcp` 未鉴权 401 检查（auth_server 直连 + nginx 反代）
+- **端到端回归脚本 `scripts/e2e_verify.py`**：41 项检查，用临时用户/家庭/账单真跑一遍
+  MCP 十个工具、家庭共享同等权限、网页用户管理 API、金额不变式，跑完自动清理
+  - 已接入 `deploy.sh install` / `upgrade`，未通过则直接判定该版本不可发布
+  - `UL_SKIP_E2E=1` 可跳过（仅限排障，不推荐）
+- **API Key 首次自动签发**：`/api/tokens` 列表为空时自动签发一把，并随该次响应一次性返回明文
+  （列表接口平时只回前缀，新用户不必先猜「重置」才有 Key 可用）
+- **家庭共享**：`family_members` 表 + `share-family` / `unshare-family` / `list-members`，
+  被共享者与拥有者权限等同（可读、可写、可删）；网页「设置」可增删成员
+
+### 修复
+- **`deploy.sh` 误判服务不可用**：环境存在 `HTTP_PROXY` 时，`curl 127.0.0.1:...` 会把请求发给代理
+  并拿到 502。全脚本改为 `curl --noproxy '*'`，本地探测不再受代理污染
+- **`deploy.sh` 谎报 launchd 成功**：`launchctl load` 失败也返回 0。改以「服务是否真的注册进
+  launchd」为判据；无 GUI 会话上下文（SSH / CI / 自动化环境）时自动回退独立后台进程，
+  服务真的起来了才算通过
+- **shell 变量名吞中文**：UTF-8 下 `$PIDFILE）` 会被 bash 当成变量名的一部分，
+  `set -u` 下直接 unbound variable；改用 `${}`
+- **MCP 服务可被一次误调用打死**：`utility.py` 用 `sys.exit(1)` 表达「操作被拒绝」，
+  而 `SystemExit` 不是 `Exception`，穿透后会终止整个 stdio 服务进程 —— 已在工具层与主循环双层拦截
+- **`list_members` 抛异常**：MySQL 返回的 `datetime` 无法 JSON 序列化（SQLite 环境测不出来）。
+  mcp_server 统一改走带 `default=` 的序列化入口，双后端行为一致
+- **表数量写死导致误报**：验证改为「核心表缺失数量」，版本新增表不再需要同步改期望值
+
+### 安全
+- HTTP MCP 通道以**已认证用户强制执行**（`threading.local` 请求上下文覆盖工具参数 `user`），登录用户无法冒充他人读写账单
+- `POST /mcp` 请求体上限 1MB，非法 Content-Length / 超限一律 400/413 并关闭连接
+
+### 变更
+- 版本统一 0.4.1（此前 mcp_server 自称 0.4.0、其余文件停在 0.3.1/0.3.2）
+- 技能契约 `skill/SKILL.md` 明确「录入走 MCP 服务」：给出 stdio 与 HTTP 两种配置，
+  CLI 降为备用入口
+- `scripts/mcp_server.py` 的 stdout 重定向从模块级移入 stdio `main()`——该文件被
+  auth_server 当库 import 时不再污染网关日志；stdio 本地配置行为不变
+
+---
+
 ## [0.3.2] - 2026-10-24
 
 ### 修复
