@@ -7,6 +7,7 @@ All notable changes to this project will be documented in this file.
 ## [0.4.1] - 2026-10-24
 
 ### 新增
+- **2026-10-24 22:51 · workbuddy** — 0.4.1 端到端回归验证 + 部署链路三处误判修复 + MCP 健壮性 + API Key 自动签发 + 技能改走 MCP（文件：scripts/e2e_verify.py scripts/deploy.sh scripts/mcp_server.py auth_server.py site/settings.html skill/SKILL.md docs/API.md docs/DESIGN.md docs/AI_AGENTS.md AGENTS.md CHANGELOG.md .gitignore）
 - **2026-10-24 22:48 · workbuddy** — MCP HTTP 端点：POST /mcp 挂入 auth_server（前端与 MCP 同端口 8089），HTTP 通道强制已认证用户，deploy verify 增 /mcp 401 检查；与 21:56 会话的 0.4.1 版本统一合并（文件：scripts/mcp_server.py auth_server.py scripts/deploy.sh docs/API.md docs/DESIGN.md CHANGELOG.md）
 - **MCP Streamable HTTP 端点 `POST /mcp`**：MCP 与前端共用 nginx `:8089` 同一端口，公网域名只需转发 8089 即可同时访问网页与 MCP 接口（此前 MCP 仅有 stdio 本地传输，域名无法访问）
   - 复用 `scripts/mcp_server.py` 全部 10 个工具与实现，工具清单单一来源
