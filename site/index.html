@@ -1,0 +1,790 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>家庭水电气账单</title>
+<style>
+:root{--bg:#f5f7fa;--card:#fff;--txt:#1f2937;--sub:#6b7280;--line:#e5e7eb;
+--water:#3b82f6;--electric:#f59e0b;--gas:#10b981;--accent:#4f46e5;}
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",sans-serif;
+background:var(--bg);color:var(--txt);padding-bottom:40px;}
+.header{background:linear-gradient(135deg,#4f46e5,#7c3aed);color:#fff;padding:20px 16px 50px;
+border-radius:0 0 28px 28px;}
+.header h1{font-size:20px;font-weight:700;}
+.header .sub{font-size:13px;opacity:.85;margin-top:4px;}
+.family-tabs{display:flex;gap:8px;margin-top:14px;overflow-x:auto;scrollbar-width:none;}
+.family-tabs::-webkit-scrollbar{display:none;}
+.family-tab{flex-shrink:0;padding:8px 18px;border-radius:20px;background:rgba(255,255,255,.16);
+font-size:14px;color:#fff;cursor:pointer;border:none;transition:.2s;}
+.family-tab.active{background:#fff;color:#4f46e5;font-weight:600;}
+.container{max-width:720px;margin:-30px auto 0;padding:0 14px;}
+.stat-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px;}
+.stat{background:var(--card);border-radius:14px;padding:14px 10px;box-shadow:0 1px 4px rgba(0,0,0,.06);}
+.stat .dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:4px;}
+.stat .label{font-size:12px;color:var(--sub);}
+.stat .usage{font-size:17px;font-weight:700;margin-top:4px;white-space:nowrap;}
+.stat .amount{font-size:12px;color:var(--sub);margin-top:2px;}
+.stat .amount b{color:#e11d48;font-weight:600;}
+.card{background:var(--card);border-radius:14px;padding:16px;margin-bottom:14px;
+box-shadow:0 1px 4px rgba(0,0,0,.06);}
+.card h2{font-size:15px;font-weight:700;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;}
+.card h2 .hint{font-size:12px;color:var(--sub);font-weight:400;}
+table{width:100%;border-collapse:collapse;font-size:13px;}
+.table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:0 -4px;}
+.table-wrap table{min-width:880px;}
+.type-block{margin-bottom:18px;}
+.type-block:last-child{margin-bottom:0;}
+.type-title{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;margin-bottom:8px;}
+.type-title .hint{font-size:12px;color:var(--sub);font-weight:400;}
+.summary-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:0 -4px;}
+.summary-wrap table{min-width:520px;}
+th{color:var(--sub);font-weight:500;text-align:left;padding:6px 4px;border-bottom:1px solid var(--line);}
+td{padding:8px 4px;border-bottom:1px solid var(--line);vertical-align:middle;}
+tr:last-child td{border-bottom:none;}
+.tag{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;color:#fff;}
+.tag-water{background:var(--water);} .tag-electric{background:var(--electric);} .tag-gas{background:var(--gas);}
+.trend{display:flex;align-items:flex-end;gap:6px;height:140px;padding:6px 2px 0;overflow-x:auto;scrollbar-width:none;}
+.trend::-webkit-scrollbar{display:none;}
+.trend-item{flex:0 0 auto;min-width:60px;display:flex;flex-direction:column;align-items:center;gap:4px;}
+.trend-bar{width:14px;border-radius:6px 6px 0 0;min-height:2px;flex-shrink:0;}
+.trend-month{font-size:10px;color:var(--sub);}
+.trend-val{font-size:10px;color:var(--sub);}
+.legend{display:flex;gap:14px;font-size:12px;color:var(--sub);margin-top:10px;}
+.legend span{display:flex;align-items:center;gap:4px;}
+.legend i{width:10px;height:10px;border-radius:3px;display:inline-block;}
+.filter-bar{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;}
+.filter-bar select{flex:1;min-width:96px;padding:8px 10px;border:1px solid var(--line);
+border-radius:10px;font-size:13px;background:#fff;color:var(--txt);outline:none;}
+.empty{text-align:center;color:var(--sub);font-size:13px;padding:20px 0;}
+.stat-year-bar{display:flex;align-items:center;justify-content:space-between;gap:8px;
+background:var(--card);border-radius:14px;padding:10px 14px;margin-bottom:12px;
+box-shadow:0 1px 4px rgba(0,0,0,.06);font-size:13px;}
+.stat-year-bar .t{font-weight:600;color:var(--txt);}
+.stat-year-bar select{padding:6px 10px;border:1px solid var(--line);border-radius:8px;
+font-size:13px;background:#fff;color:var(--txt);outline:none;}
+.pager{display:flex;align-items:center;justify-content:center;gap:6px;margin-top:12px;
+font-size:13px;color:var(--sub);flex-wrap:wrap;}
+.pager .info{margin-right:6px;}
+.pager button{min-width:32px;padding:6px 10px;border:1px solid var(--line);border-radius:8px;
+background:#fff;color:var(--txt);font-size:13px;cursor:pointer;}
+.pager button:disabled{opacity:.4;cursor:not-allowed;}
+.pager button.active{background:var(--accent);color:#fff;border-color:var(--accent);}
+.img-link{color:var(--accent);text-decoration:none;font-size:12px;}
+.energy-filter{display:flex;align-items:center;gap:8px;}
+.energy-tabs{display:flex;gap:8px;flex:1;}
+.energy-tab{flex:1;min-width:0;padding:8px 0;border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--sub);font-size:13px;cursor:pointer;transition:.2s;text-align:center;white-space:nowrap;}
+.energy-tab.active{background:var(--accent);color:#fff;border-color:var(--accent);font-weight:600;}
+.tier-box{margin-top:14px;padding-bottom:22px;}
+.tier-bar{position:relative;height:34px;border-radius:10px;display:flex;overflow:visible;box-shadow:inset 0 0 0 1px rgba(0,0,0,.04);}
+.tier-seg{height:100%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:600;overflow:hidden;white-space:nowrap;}
+.seg1{background:#22c55e;}
+.seg2{background:#facc15;color:#713f12;}
+.seg3{background:#fb7185;}
+.tier-ticks{position:absolute;left:0;right:0;top:38px;height:0;pointer-events:none;}
+.tick{position:absolute;transform:translateX(-50%);font-size:10px;color:var(--sub);background:var(--card);padding:0 3px;border-radius:4px;}
+.tier-pointer{position:absolute;top:-28px;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;z-index:6;}
+.tier-tip{background:#e11d48;color:#fff;font-size:10px;padding:2px 6px;border-radius:6px;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.25);}
+.tier-arrow{width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-top:7px solid #e11d48;}
+.tier-cards{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:14px;}
+.tier-card{background:#f8fafc;border:1px solid var(--line);border-radius:10px;padding:10px;font-size:12px;color:var(--txt);line-height:1.55;}
+.tier-card.wide{grid-column:1/-1;}
+.tier-k{color:var(--sub);}
+.tier-card b{color:#e11d48;}
+.foot{text-align:center;color:#9ca3af;font-size:11px;margin-top:20px;}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>家庭水电气账单</h1>
+  <div class="sub">每月用水 / 用电 / 燃气用量与费用记录</div>
+  <div class="family-tabs" id="familyTabs"></div>
+</div>
+
+<div class="container">
+  <div class="stat-year-bar">
+    <span class="t">当年汇总</span>
+    <select id="statYear" onchange="renderStats()"></select>
+  </div>
+  <div class="stat-grid" id="statGrid"></div>
+
+  <div class="card">
+    <h2>月度明细 <span class="hint" id="monthCount"></span></h2>
+    <div class="filter-bar">
+      <select id="dType" onchange="detailSet('type',this.value)">
+        <option value="">全部类型</option>
+        <option value="water">水费</option>
+        <option value="electric">电费</option>
+        <option value="gas">燃气费</option>
+      </select>
+      <select id="dYear" onchange="detailSet('year',this.value)">
+        <option value="">全部年份</option>
+      </select>
+      <select id="dSort" onchange="detailSet('sort',this.value)">
+        <option value="month_desc">月份 新→旧</option>
+        <option value="month_asc">月份 旧→新</option>
+        <option value="amount_desc">费用 高→低</option>
+        <option value="amount_asc">费用 低→高</option>
+      </select>
+      <select id="dSize" onchange="detailSet('size',this.value)">
+        <option value="10">10条/页</option>
+        <option value="20">20条/页</option>
+        <option value="50">50条/页</option>
+        <option value="100">100条/页</option>
+      </select>
+    </div>
+    <div id="billTable"><div class="empty">暂无数据</div></div>
+  </div>
+
+  <div class="card">
+    <h2>年度趋势 <span class="hint">柱状=费用 · 折线=用量 · 悬停查看数值</span></h2>
+    <div class="filter-bar">
+      <select id="trendYear" onchange="renderTrend()"></select>
+    </div>
+    <div id="trendChart" style="width:100%;height:380px"></div>
+  </div>
+
+  <div class="card">
+    <h2>用能明细 <span class="hint">月度费用分项 · 底部为年度阶梯收费状态</span></h2>
+    <div class="filter-bar energy-filter">
+      <div class="energy-tabs" id="energyTabs">
+        <button class="energy-tab active" data-type="water" onclick="energySetType('water')">水费</button>
+        <button class="energy-tab" data-type="electric" onclick="energySetType('electric')">电费</button>
+        <button class="energy-tab" data-type="gas" onclick="energySetType('gas')">燃气费</button>
+      </div>
+      <select id="energyYear" onchange="renderEnergyDetail()"></select>
+    </div>
+    <div id="energyChart" style="width:100%;height:340px"></div>
+    <div id="energyTierBar"></div>
+  </div>
+
+  <div class="card">
+    <h2>数据汇总 <span class="hint">按年 / 季度 / 月筛选</span></h2>
+    <div class="filter-bar">
+      <select id="filterType" onchange="renderSummary()">
+        <option value="">全部类型</option>
+        <option value="water">水费</option>
+        <option value="electric">电费</option>
+        <option value="gas">燃气费</option>
+      </select>
+      <select id="filterYear" onchange="renderSummary()"></select>
+      <select id="filterQuarter" onchange="renderSummary()">
+        <option value="">全部季度</option>
+        <option value="1">Q1 (1-3月)</option>
+        <option value="2">Q2 (4-6月)</option>
+        <option value="3">Q3 (7-9月)</option>
+        <option value="4">Q4 (10-12月)</option>
+      </select>
+      <select id="filterMonth" onchange="renderSummary()">
+        <option value="">全部月份</option>
+        <option value="01">1月</option><option value="02">2月</option>
+        <option value="03">3月</option><option value="04">4月</option>
+        <option value="05">5月</option><option value="06">6月</option>
+        <option value="07">7月</option><option value="08">8月</option>
+        <option value="09">9月</option><option value="10">10月</option>
+        <option value="11">11月</option><option value="12">12月</option>
+      </select>
+    </div>
+    <div id="summaryTable"><div class="empty">暂无数据</div></div>
+  </div>
+</div>
+
+<div class="foot">数据来源：本地 UtilityLog · 每次账单截图由 Marvis 同步录入</div>
+
+<script src="data.js?v=v0"></script>
+<script src="vendor/echarts.min.js"></script>
+<script>
+const DATA = window.UTILITY_DATA || {families:[], bills:[]};
+const TYPE_META = {
+  water:{name:"水费",color:"#3b82f6",unit:"m³"},
+  electric:{name:"电费",color:"#f59e0b",unit:"kWh"},
+  gas:{name:"燃气费",color:"#10b981",unit:"m³"}
+};
+let currentFamily = DATA.families[0] ? DATA.families[0].id : null;
+const detailState = { type:"", year:"", sort:"month_desc", size:10, page:{} };
+function detailSet(key, val){
+  detailState[key] = val;
+  if (key !== "page") detailState.page = {};
+  renderTable();
+}
+function detailSetPage(type, val){
+  detailState.page[type] = val;
+  renderTable();
+}
+
+function billsOf(familyId){
+  return DATA.bills.filter(b => b.family_id === familyId);
+}
+function familyById(id){
+  return DATA.families.find(f => f.id === id);
+}
+function fmt(n){
+  if (n === null || n === undefined || isNaN(n)) return "-";
+  return Number(n).toLocaleString("zh-CN", {maximumFractionDigits: 2});
+}
+
+function renderTabs(){
+  const el = document.getElementById("familyTabs");
+  if (!DATA.families.length){ el.innerHTML = ""; return; }
+  el.innerHTML = DATA.families.map(f =>
+    `<button class="family-tab ${f.id===currentFamily?'active':''}" onclick="switchFamily(${f.id})">${f.name}</button>`
+  ).join("");
+}
+
+function switchFamily(id){
+  currentFamily = id;
+  renderTabs(); renderStats(); renderTable(); renderTrend(); renderEnergyDetail(); renderSummary();
+}
+
+function latestByType(bills){
+  const m = {};
+  bills.forEach(b => {
+    const k = b.type;
+    if (!m[k] || b.month > m[k].month) m[k] = b;
+  });
+  return m;
+}
+
+function renderStats(){
+  const el = document.getElementById("statGrid");
+  const bills = billsOf(currentFamily);
+  if (!bills.length){ el.innerHTML = `<div class="empty" style="grid-column:1/-1">暂无账单数据，发送账单截图即可录入</div>`; return; }
+  const years = [...new Set(bills.map(b=>b.month.slice(0,4)))].sort();
+  const ySel = document.getElementById("statYear");
+  const curY = ySel.value;
+  if (ySel.options.length !== years.length || !years.includes(curY)){
+    ySel.innerHTML = years.map(y=>`<option value="${y}">${y}年</option>`).join("");
+    ySel.value = years.includes(curY) ? curY : years[years.length-1];
+  }
+  const y = ySel.value;
+  const yearBills = bills.filter(b=>b.month.slice(0,4)===y);
+  const total = yearBills.reduce((s,b)=>s+(b.amount||0),0);
+  const months = new Set(yearBills.map(b=>b.month)).size;
+  let html = "";
+  ["water","electric","gas"].forEach(t=>{
+    const rs = yearBills.filter(b=>b.type===t);
+    const meta = TYPE_META[t];
+    const usage = rs.reduce((s,b)=>s+(b.usage||0),0);
+    const amount = rs.reduce((s,b)=>s+(b.amount||0),0);
+    html += `<div class="stat">
+      <div class="label"><span class="dot" style="background:${meta.color}"></span>${meta.name}</div>
+      <div class="usage">${rs.length?fmt(usage):"-"} <span style="font-size:11px;color:var(--sub)">${meta.unit}</span></div>
+      <div class="amount">${rs.length?"¥"+fmt(amount):"无记录"}</div>
+    </div>`;
+  });
+  html += `<div class="stat" style="grid-column:1/-1">
+    <div class="label"><span class="dot" style="background:#e11d48"></span>总费用（${y}）</div>
+    <div class="usage">¥${fmt(total)}</div>
+    <div class="amount">共 ${months} 个月</div>
+  </div>`;
+  el.innerHTML = html;
+}
+
+function monthSort(a,b){ return a.month.localeCompare(b.month); }
+
+function renderTable(){
+  const el = document.getElementById("billTable");
+  const ySel = document.getElementById("dYear");
+  let bills = billsOf(currentFamily);
+  const years = [...new Set(bills.map(b=>b.month.slice(0,4)))].sort();
+  const curY = detailState.year;
+  if (ySel.options.length !== years.length + 1 || !years.includes(curY)){
+    ySel.innerHTML = `<option value="">全部年份</option>` +
+      years.map(y=>`<option value="${y}" ${y===curY?"selected":""}>${y}年</option>`).join("");
+  }
+  if (detailState.year) bills = bills.filter(b=>b.month.slice(0,4)===detailState.year);
+  switch (detailState.sort){
+    case "month_asc": bills.sort(monthSort); break;
+    case "month_desc": bills.sort((a,b)=>monthSort(b,a)); break;
+    case "amount_desc": bills.sort((a,b)=>(b.amount||0)-(a.amount||0)); break;
+    case "amount_asc": bills.sort((a,b)=>(a.amount||0)-(b.amount||0)); break;
+  }
+  const totalCount = bills.length;
+  document.getElementById("monthCount").textContent = `共 ${totalCount} 条`;
+  if (!totalCount){ el.innerHTML = `<div class="empty">暂无数据</div>`; return; }
+  const types = detailState.type ? [detailState.type] : ["water","electric","gas"];
+  const blocks = types.map(t=>{
+    const tbills = bills.filter(b=>b.type===t);
+    if (!tbills.length) return "";
+    const pages = Math.max(1, Math.ceil(tbills.length/detailState.size));
+    let page = detailState.page[t] || 1;
+    if (page > pages) page = pages;
+    const start = (page-1)*detailState.size;
+    const pageBills = tbills.slice(start, start+detailState.size);
+    const rows = pageBills.map(b=>buildDetailRow(t,b)).join("");
+    return `<div class="type-block">
+      <div class="type-title"><span class="tag tag-${t}">${TYPE_META[t].name}</span><span class="hint">共 ${tbills.length} 条</span></div>
+      <div class="table-wrap"><table><thead>${detailThead(t)}</thead><tbody>${rows}</tbody></table></div>
+      ${pagerHtml(t, tbills.length, page, pages)}
+    </div>`;
+  }).join("");
+  el.innerHTML = blocks || `<div class="empty">暂无数据</div>`;
+}
+
+function detailThead(t){
+  if (t === "water") return `<tr><th>类型</th><th>月份</th><th>上次读数</th><th>本次读数</th><th>用量</th><th>水费单价</th><th>污水单价</th><th>水费金额</th><th>污水费金额</th><th>综合费用</th><th>当前档位</th><th>本档剩余</th><th>年累计</th><th>档位明细</th><th>凭证</th></tr>`;
+  if (t === "electric") return `<tr><th>类型</th><th>月份</th><th>峰上期</th><th>峰本期</th><th>谷上期</th><th>谷本期</th><th>峰电量</th><th>峰单价</th><th>谷电量</th><th>谷单价</th><th>综合单价</th><th>费用</th><th>当前档位</th><th>本档剩余</th><th>年累计</th><th>档位明细</th><th>凭证</th></tr>`;
+  return `<tr><th>类型</th><th>月份</th><th>上次读数</th><th>本次读数</th><th>用量</th><th>单价</th><th>费用</th><th>当前档位</th><th>本档剩余</th><th>年累计</th><th>档位明细</th><th>凭证</th></tr>`;
+}
+
+function tierDetailTxtOf(b){
+  let tierDetail = b.tier_detail ? JSON.parse(b.tier_detail) : null;
+  if (!tierDetail) return "-";
+  return Object.keys(tierDetail).map(k=>{
+    const t = tierDetail[k];
+    const priceTxt = t.峰价!=null ? `峰${t.峰价}/谷${t.谷价}` : (t.单价!=null ? `¥${t.单价}` : (t.综合价!=null ? `水${t.水费价}+污${t.污水价}` : ""));
+    return `${k}${t.上限?`(≤${t.上限})`:""}:${priceTxt}`;
+  }).join("; ");
+}
+
+function buildDetailRow(t, b){
+  const meta = TYPE_META[t] || {};
+  const tier = b.current_tier || "-";
+  const tierRem = b.tier_remaining!=null ? fmt(b.tier_remaining) : "-";
+  const yearUsage = b.year_usage!=null ? fmt(b.year_usage) : "-";
+  const tierDetailTxt = tierDetailTxtOf(b);
+  const cert = b.image ? `<a class="img-link" target="_blank" href="images/${b.image}">截图</a>` : "";
+  const tagTd = `<td><span class="tag tag-${t}">${meta.name||t}</span></td>`;
+  const monthTd = `<td>${b.month}</td>`;
+  const tierTds = `<td><b>${tier}</b></td><td>${tierRem}</td><td>${yearUsage}</td><td style="font-size:11px;color:var(--sub)">${tierDetailTxt}</td>`;
+  const certTd = `<td>${cert}</td>`;
+  if (t === "water"){
+    const waterUnit = (b.water_fee!=null && b.usage) ? fmt(b.water_fee/b.usage) : "-";
+    const sewageUnit = b.sewage_price!=null ? "¥"+fmt(b.sewage_price)+"/m³" : "-";
+    const waterFee = b.water_fee!=null ? "¥"+fmt(b.water_fee) : "-";
+    const sewageFee = b.sewage_fee!=null ? "¥"+fmt(b.sewage_fee) : "-";
+    return `<tr>${tagTd}${monthTd}
+      <td>${b.prev_reading!=null ? fmt(b.prev_reading) : "-"}</td>
+      <td>${b.cur_reading!=null ? fmt(b.cur_reading) : "-"}</td>
+      <td>${fmt(b.usage)} ${b.usage_unit||meta.unit||""}</td>
+      <td>${waterUnit}</td>
+      <td>${sewageUnit}</td>
+      <td>${waterFee}</td>
+      <td>${sewageFee}</td>
+      <td><b>¥${fmt(b.amount)}</b></td>
+      ${tierTds}${certTd}</tr>`;
+  }
+  if (t === "electric"){
+    const peakUsage = b.peak_usage!=null ? fmt(b.peak_usage)+" kWh" : "-";
+    const peakPrice = b.peak_price!=null ? "¥"+fmt(b.peak_price) : "-";
+    const valleyUsage = b.valley_usage!=null ? fmt(b.valley_usage)+" kWh" : "-";
+    const valleyPrice = b.valley_price!=null ? "¥"+fmt(b.valley_price) : "-";
+    return `<tr>${tagTd}${monthTd}
+      <td>${b.peak_prev_reading!=null ? fmt(b.peak_prev_reading) : "-"}</td>
+      <td>${b.peak_cur_reading!=null ? fmt(b.peak_cur_reading) : "-"}</td>
+      <td>${b.valley_prev_reading!=null ? fmt(b.valley_prev_reading) : "-"}</td>
+      <td>${b.valley_cur_reading!=null ? fmt(b.valley_cur_reading) : "-"}</td>
+      <td>${peakUsage}</td>
+      <td>${peakPrice}</td>
+      <td>${valleyUsage}</td>
+      <td>${valleyPrice}</td>
+      <td>${b.unit_price!=null ? "¥"+fmt(b.unit_price) : "-"}</td>
+      <td><b>¥${fmt(b.amount)}</b></td>
+      ${tierTds}${certTd}</tr>`;
+  }
+  return `<tr>${tagTd}${monthTd}
+    <td>${b.prev_reading!=null ? fmt(b.prev_reading) : "-"}</td>
+    <td>${b.cur_reading!=null ? fmt(b.cur_reading) : "-"}</td>
+    <td>${fmt(b.usage)} ${b.usage_unit||meta.unit||""}</td>
+    <td>${b.unit_price!=null ? "¥"+fmt(b.unit_price) : "-"}</td>
+    <td><b>¥${fmt(b.amount)}</b></td>
+    ${tierTds}${certTd}</tr>`;
+}
+
+function pagerHtml(type, totalCount, page, pages){
+  if (pages <= 1) return `<div class="pager"><span class="info">共 ${totalCount} 条</span></div>`;
+  const jump = n => `onclick="detailSetPage('${type}',${n})"`;
+  let btns = `<button ${page<=1?'disabled':''} ${jump(page-1)}>上一页</button>`;
+  const seq = [];
+  for (let i=1;i<=pages;i++){
+    if (pages>9 && i>2 && i<pages-1 && Math.abs(i-page)>2){
+      if (seq[seq.length-1] !== "…") seq.push("…");
+    } else seq.push(i);
+  }
+  seq.forEach(v=>{
+    btns += v==="…" ? `<span>…</span>` : `<button class="${v===page?'active':''}" ${jump(v)}>${v}</button>`;
+  });
+  btns += `<button ${page>=pages?'disabled':''} ${jump(page+1)}>下一页</button>`;
+  return `<div class="pager"><span class="info">共 ${totalCount} 条 · 第 ${page}/${pages} 页</span>${btns}</div>`;
+}
+
+let trendChart = null;
+const TYPE_LABEL = { water:"水", electric:"电", gas:"燃气" };
+function renderTrend(){
+  const bills = billsOf(currentFamily);
+  const ySel = document.getElementById("trendYear");
+  const years = [...new Set(bills.map(b=>b.month.slice(0,4)))].sort();
+  const curY = ySel.value;
+  if (ySel.options.length !== years.length || !years.includes(curY)){
+    ySel.innerHTML = years.map(y=>`<option value="${y}">${y}年</option>`).join("");
+    ySel.value = years.includes(curY) ? curY : years[years.length-1];
+  }
+  const y = ySel.value;
+  const periods = [[1,2],[3,4],[5,6],[7,8],[9,10],[11,12]];
+  const pLabel = p => p[0]+"-"+p[1]+"月";
+  const sumVal = (t, p, f) => {
+    let s = 0, hit = 0;
+    p.forEach(mm=>{
+      const b = bills.find(x=>x.type===t && x.month===y+"-"+String(mm).padStart(2,"0"));
+      if (b && b[f]!=null){ s += b[f]; hit++; }
+    });
+    return hit ? s : null;
+  };
+  const feeSeries = [];
+  // 水费单柱（总价=水费金额+污水费金额，与电费总价=峰+谷概念一致）
+  feeSeries.push({
+    name: "水费",
+    type: "bar",
+    barMaxWidth: 18,
+    itemStyle: { color: TYPE_META.water.color, borderRadius: [0,0,0,0] },
+    emphasis: { focus: "series" },
+    data: periods.map(p=>sumVal("water",p,"amount"))
+  });
+  ["electric","gas"].forEach(t=>{
+    feeSeries.push({
+      name: TYPE_LABEL[t]+"费",
+      type: "bar",
+      barMaxWidth: 18,
+      itemStyle: { color: TYPE_META[t].color, borderRadius: [0,0,0,0] },
+      emphasis: { focus: "series" },
+      data: periods.map(p=>sumVal(t,p,"amount"))
+    });
+  });
+  const useSeries = ["water","electric","gas"].map(t=>({
+    name: TYPE_LABEL[t]+"用量",
+    type: "line",
+    yAxisIndex: 1,
+    connectNulls: true,
+    symbol: "circle",
+    symbolSize: 6,
+    lineStyle: { width: 2.5, type: t==="gas" ? "dashed" : "solid" },
+    itemStyle: { color: TYPE_META[t].color },
+    data: periods.map(p=>sumVal(t,p,"usage"))
+  }));
+  const el = document.getElementById("trendChart");
+  const option = {
+    color: [TYPE_META.water.color, TYPE_META.electric.color, TYPE_META.gas.color],
+    tooltip: {
+      trigger: "axis",
+      axisPointer: { type: "shadow" },
+      backgroundColor: "rgba(255,255,255,.96)",
+      borderColor: "#e5e7eb",
+      textStyle: { color: "#1f2937", fontSize: 12 },
+      formatter: function(params){
+        if (!params || !params.length) return "";
+        const mm = params[0].axisValue;
+        let html = `<div style="font-weight:700;margin-bottom:4px">${y}年${mm}</div>`;
+        let feeTotal = 0;
+        const feeMap = {}, useMap = {};
+        params.forEach(p=>{
+          if (p.seriesType === "bar"){
+            const v = p.value==null ? 0 : p.value;
+            feeMap[p.seriesName] = v; feeTotal += v;
+          } else if (p.seriesType === "line"){
+            useMap[p.seriesName] = p.value;
+          }
+        });
+        ["水费","电费","燃气费"].forEach(n=>{
+          const v = feeMap[n];
+          html += `<div style="display:flex;justify-content:space-between;gap:20px"><span>${n}</span><b style="color:#e11d48">${v==null?"-":"¥"+fmt(v)}</b></div>`;
+        });
+        html += `<div style="display:flex;justify-content:space-between;gap:20px;border-top:1px solid #e5e7eb;margin-top:4px;padding-top:4px"><span>费用合计</span><b style="color:#e11d48">¥${fmt(feeTotal)}</b></div>`;
+        ["water","electric","gas"].forEach(t=>{
+          const n = TYPE_LABEL[t]+"用量";
+          const v = useMap[n];
+          html += `<div style="display:flex;justify-content:space-between;gap:20px"><span><i style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${TYPE_META[t].color};margin-right:4px"></i>${n}</span><b>${v==null?"-":fmt(v)+" "+TYPE_META[t].unit}</b></div>`;
+        });
+        return html;
+      }
+    },
+    legend: { top: 0, type: "scroll", textStyle: { fontSize: 11, color: "#6b7280" }, itemWidth: 14, itemHeight: 9 },
+    grid: { left: 8, right: 8, top: 32, bottom: 44, containLabel: true },
+    xAxis: {
+      type: "category",
+      data: periods.map(pLabel),
+      axisLabel: { fontSize: 10, color: "#6b7280", interval: 0 },
+      axisLine: { lineStyle: { color: "#e5e7eb" } },
+      axisTick: { show: false }
+    },
+    yAxis: [
+      { type: "value", name: "费用(元)", nameTextStyle: { fontSize: 11, color: "#9ca3af" }, axisLabel: { fontSize: 11, color: "#6b7280" }, splitLine: { lineStyle: { type: "dashed", color: "#eef0f4" } } },
+      { type: "value", name: "用量", nameTextStyle: { fontSize: 11, color: "#9ca3af" }, axisLabel: { fontSize: 11, color: "#6b7280" }, splitLine: { show: false } }
+    ],
+    series: [...feeSeries, ...useSeries]
+  };
+  if (!trendChart){
+    trendChart = echarts.init(el);
+    window.addEventListener("resize", ()=>trendChart.resize());
+  }
+  trendChart.setOption(option, true);
+}
+
+let energyState = { type: "water" };
+let energyChart = null;
+const ENERGY_TIERS = {
+  water:   { unit:"m³", up1:220, up2:300, segPrice:["4.05 元/m³（水费 2.25 + 污水 2.00×0.9）","5.80 元/m³","8.79 元/m³"] },
+  electric:{ unit:"kWh", up1:3120, up2:4800, segPrice:["峰 0.617 / 谷 0.307 元/kWh","峰 0.677 / 谷 0.337 元/kWh","峰 0.977 / 谷 0.487 元/kWh"] },
+  gas:     { unit:"m³", up1:310, up2:520, segPrice:["3.00 元/m³","3.30 元/m³","4.20 元/m³"] }
+};
+function energySetType(type){
+  energyState.type = type;
+  document.querySelectorAll("#energyTabs .energy-tab").forEach(b=>{
+    b.classList.toggle("active", b.dataset.type === type);
+  });
+  renderEnergyDetail();
+}
+function energySegments(t, b){
+  if (t === "water"){
+    return {
+      segs: [
+        { name:"水费金额", value: b.water_fee!=null ? b.water_fee : null, color:"#3b82f6" },
+        { name:"污水费金额", value: b.sewage_fee!=null ? b.sewage_fee : null, color:"#93c5fd" }
+      ],
+      total: b.amount!=null ? b.amount : null
+    };
+  }
+  if (t === "electric"){
+    return {
+      segs: [
+        { name:"峰电费", value: (b.peak_usage!=null && b.peak_price!=null) ? b.peak_usage*b.peak_price : null, color:"#f59e0b" },
+        { name:"谷电费", value: (b.valley_usage!=null && b.valley_price!=null) ? b.valley_usage*b.valley_price : null, color:"#fcd34d" }
+      ],
+      total: b.amount!=null ? b.amount : null
+    };
+  }
+  return {
+    segs: [ { name:"燃气费", value: b.amount!=null ? b.amount : null, color:"#10b981" } ],
+    total: b.amount!=null ? b.amount : null
+  };
+}
+function renderEnergyDetail(){
+  const bills = billsOf(currentFamily);
+  const ySel = document.getElementById("energyYear");
+  const years = [...new Set(bills.map(b=>b.month.slice(0,4)))].sort();
+  const curY = ySel.value;
+  if (ySel.options.length !== years.length || !years.includes(curY)){
+    ySel.innerHTML = years.map(y=>`<option value="${y}">${y}年</option>`).join("");
+    ySel.value = years.includes(curY) ? curY : years[years.length-1];
+  }
+  const y = ySel.value;
+  const t = energyState.type;
+  const meta = TYPE_META[t];
+  const tm = ENERGY_TIERS[t];
+  const monthBills = bills.filter(b=>b.type===t && b.month.slice(0,4)===y).sort(monthSort);
+  const el = document.getElementById("energyChart");
+  const tierEl = document.getElementById("energyTierBar");
+  if (!monthBills.length){
+    if (energyChart) energyChart.clear();
+    el.innerHTML = "";
+    tierEl.innerHTML = `<div class="empty">${y}年暂无${meta.name}账单数据</div>`;
+    return;
+  }
+  const segInfo = monthBills.map(b=>{
+    const r = energySegments(t, b);
+    return { month: b.month.slice(5), segs: r.segs, total: r.total, usage: b.usage!=null ? b.usage : null };
+  });
+  const segNames = [...new Set(segInfo.flatMap(s=>s.segs.map(g=>g.name)))];
+  const segColor = {};
+  segInfo.forEach(s=>s.segs.forEach(g=>{ segColor[g.name] = g.color; }));
+  const series = segNames.map((name, idx)=>{
+    const isTop = idx === segNames.length-1;
+    const s = {
+      name, type:"bar", stack:"fee", barMaxWidth: 26,
+      itemStyle: { color: segColor[name] || "#cbd5e1" },
+      emphasis: { focus: "series" },
+      data: segInfo.map(si=>{
+        const g = si.segs.find(x=>x.name===name);
+        const v = g ? g.value : null;
+        return v==null ? null : { value: v, total: si.total };
+      })
+    };
+    if (isTop){
+      s.label = {
+        show:true, position:"top", fontSize:10, color:"#374151",
+        formatter: p => (p.data && p.data.total!=null) ? "¥"+fmt(p.data.total) : ""
+      };
+    }
+    return s;
+  });
+  series.push({
+    name: meta.name+"用量",
+    type: "line",
+    yAxisIndex: 1,
+    connectNulls: true,
+    symbol: "circle",
+    symbolSize: 6,
+    lineStyle: { width: 2.5, type: t==="gas" ? "dashed" : "solid" },
+    itemStyle: { color: meta.color },
+    data: segInfo.map(s=>s.usage)
+  });
+  const option = {
+    tooltip: {
+      trigger: "axis",
+      axisPointer: { type: "shadow" },
+      backgroundColor: "rgba(255,255,255,.96)",
+      borderColor: "#e5e7eb",
+      textStyle: { color: "#1f2937", fontSize: 12 },
+      formatter: function(params){
+        if (!params || !params.length) return "";
+        const mm = params[0].axisValue;
+        let html = `<div style="font-weight:700;margin-bottom:4px">${y}年${mm}</div>`;
+        let total = null;
+        const segVal = {};
+        params.forEach(p=>{
+          if (p.seriesType === "bar" && p.value!=null){
+            segVal[p.seriesName] = p.value;
+            if (p.data && p.data.total!=null) total = p.data.total;
+          } else if (p.seriesType === "line" && p.value!=null){
+            html += `<div style="display:flex;justify-content:space-between;gap:20px"><span><i style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${meta.color};margin-right:4px"></i>${p.seriesName}</span><b>${fmt(p.value)} ${tm.unit}</b></div>`;
+          }
+        });
+        segNames.forEach(n=>{
+          const v = segVal[n];
+          html += `<div style="display:flex;justify-content:space-between;gap:20px"><span>${n}</span><b style="color:#e11d48">${v==null?"-":"¥"+fmt(v)}</b></div>`;
+        });
+        if (total!=null){
+          html += `<div style="display:flex;justify-content:space-between;gap:20px;border-top:1px solid #e5e7eb;margin-top:4px;padding-top:4px"><span>费用合计</span><b style="color:#e11d48">¥${fmt(total)}</b></div>`;
+        }
+        return html;
+      }
+    },
+    legend: { top: 0, type: "scroll", textStyle: { fontSize: 11, color: "#6b7280" }, itemWidth: 14, itemHeight: 9 },
+    grid: { left: 8, right: 8, top: 32, bottom: 44, containLabel: true },
+    xAxis: {
+      type: "category",
+      data: segInfo.map(s=>s.month+"月"),
+      axisLabel: { fontSize: 10, color: "#6b7280", interval: 0 },
+      axisLine: { lineStyle: { color: "#e5e7eb" } },
+      axisTick: { show: false }
+    },
+    yAxis: [
+      { type: "value", name: "费用(元)", nameTextStyle: { fontSize: 11, color: "#9ca3af" }, axisLabel: { fontSize: 11, color: "#6b7280" }, splitLine: { lineStyle: { type: "dashed", color: "#eef0f4" } } },
+      { type: "value", name: "用量("+tm.unit+")", nameTextStyle: { fontSize: 11, color: "#9ca3af" }, axisLabel: { fontSize: 11, color: "#6b7280" }, splitLine: { show: false } }
+    ],
+    series
+  };
+  if (!energyChart){
+    energyChart = echarts.init(el);
+    window.addEventListener("resize", ()=>energyChart.resize());
+  }
+  energyChart.setOption(option, true);
+  renderEnergyTier(t, y, monthBills, tm, meta);
+}
+function renderEnergyTier(t, y, monthBills, tm, meta){
+  const el = document.getElementById("energyTierBar");
+  const last = monthBills[monthBills.length-1];
+  const yearUsage = (last && last.year_usage!=null) ? last.year_usage : 0;
+  const up1 = tm.up1, up2 = tm.up2;
+  const totalW = up2 / 0.75; // 第三档无限上限，按剩余 25% 宽度示意
+  const p1 = up1/totalW*100, p2 = up2/totalW*100;
+  const tier = yearUsage<=up1 ? 1 : (yearUsage<=up2 ? 2 : 3);
+  const cap = tier===1 ? up1 : (tier===2 ? up2 : null);
+  const remain = tier===3 ? null : Math.max(0, cap - yearUsage);
+  let pos;
+  if (yearUsage <= up2){
+    pos = Math.min(yearUsage/totalW*100, p2);
+  } else {
+    pos = Math.min(75 + (yearUsage-up2)/up1*25, 100); // 第三档内示意映射
+  }
+  const tick1 = p1.toFixed(1), tick2 = p2.toFixed(1);
+  const segW1 = (up1/totalW*100).toFixed(2), segW2 = ((up2-up1)/totalW*100).toFixed(2);
+  const tierName = tier===1 ? "第一档" : (tier===2 ? "第二档" : "第三档");
+  const capTxt = cap==null ? "不限" : fmt(cap)+" "+tm.unit;
+  const remainTxt = tier===3 ? "已进入第三档" : fmt(remain)+" "+tm.unit;
+  const tipTxt = yearUsage===0 ? "累计 0 "+tm.unit : "累计 "+fmt(yearUsage)+" "+tm.unit;
+  el.innerHTML = `<div class="tier-box">
+    <div class="tier-bar">
+      <div class="tier-seg seg1" style="width:${segW1}%"><span class="tier-name">第一阶段</span></div>
+      <div class="tier-seg seg2" style="width:${segW2}%"><span class="tier-name">第二阶段</span></div>
+      <div class="tier-seg seg3" style="width:25%"><span class="tier-name">第三阶段</span></div>
+      <div class="tier-ticks">
+        <span class="tick" style="left:${tick1}%">${fmt(up1)}</span>
+        <span class="tick" style="left:${tick2}%">${fmt(up2)}</span>
+        <span class="tick" style="left:100%;transform:translateX(-100%)">不限</span>
+      </div>
+      <div class="tier-pointer" style="left:${pos}%">
+        <div class="tier-tip">${tipTxt}</div>
+        <div class="tier-arrow"></div>
+      </div>
+    </div>
+    <div class="tier-cards">
+      <div class="tier-card"><span class="tier-k">当前档位</span>：<b>${tierName}</b></div>
+      <div class="tier-card"><span class="tier-k">年累计用量</span>：<b>${fmt(yearUsage)} ${tm.unit}</b></div>
+      <div class="tier-card"><span class="tier-k">本档上限</span>：${capTxt}</div>
+      <div class="tier-card"><span class="tier-k">本档剩余</span>：${remainTxt}</div>
+      <div class="tier-card wide"><span class="tier-k">各档单价</span>：一档 ${tm.segPrice[0]}；二档 ${tm.segPrice[1]}；三档 ${tm.segPrice[2]}</div>
+    </div>
+  </div>`;
+}
+function quarterOf(mm){ return Math.ceil(parseInt(mm,10)/3); }
+
+function renderSummary(){
+  const bills = billsOf(currentFamily);
+  const years = [...new Set(bills.map(b=>b.month.slice(0,4)))].sort();
+  const ySel = document.getElementById("filterYear");
+  const curY = ySel.value;
+  if (ySel.options.length !== years.length + 1 || !years.includes(curY)){
+    ySel.innerHTML = `<option value="">全部年份</option>` +
+      years.map(y=>`<option value="${y}" ${y===curY?"selected":""}>${y}年</option>`).join("");
+  }
+  const y = ySel.value, q = document.getElementById("filterQuarter").value,
+        m = document.getElementById("filterMonth").value,
+        t = document.getElementById("filterType").value;
+  let list = bills;
+  if (y) list = list.filter(b=>b.month.slice(0,4)===y);
+  if (q) list = list.filter(b=>quarterOf(b.month.slice(5,7))===parseInt(q,10));
+  if (m) list = list.filter(b=>b.month.slice(5,7)===m);
+  if (t) list = list.filter(b=>b.type===t);
+  const el = document.getElementById("summaryTable");
+  if (!list.length){ el.innerHTML = `<div class="empty">所选条件下暂无账单记录</div>`; return; }
+  const types = t ? [t] : ["water","electric","gas"];
+  const rows = types.map(tt=>{
+    const rs = list.filter(b=>b.type===tt);
+    if (!rs.length) return "";
+    const meta = TYPE_META[tt];
+    const usage = rs.reduce((s,b)=>s+(b.usage||0),0);
+    const amount = rs.reduce((s,b)=>s+(b.amount||0),0);
+    let detailTxt = "-";
+    if (tt === "water"){
+      const wf = rs.reduce((s,b)=>s+(b.water_fee||0),0);
+      const sf = rs.reduce((s,b)=>s+(b.sewage_fee||0),0);
+      detailTxt = (wf||sf) ? `水费 ¥${fmt(wf)} · 污水费 ¥${fmt(sf)}` : "-";
+    } else if (tt === "electric"){
+      const peak = rs.reduce((s,b)=>s+(b.peak_usage||0),0);
+      const valley = rs.reduce((s,b)=>s+(b.valley_usage||0),0);
+      detailTxt = (peak||valley) ? `峰 ${fmt(peak)} / 谷 ${fmt(valley)} kWh` : "-";
+    } else {
+      const up = [...rs].sort((a,b)=>b.month.localeCompare(a.month)).find(b=>b.unit_price!=null);
+      detailTxt = up ? `单价 ¥${fmt(up.unit_price)}/m³` : "-";
+    }
+    const tierInfo = rs.map(b=>{
+      const parts = [];
+      if (b.current_tier) parts.push(b.current_tier);
+      if (b.tier_remaining!=null) parts.push(`剩${fmt(b.tier_remaining)}`);
+      if (b.year_usage!=null) parts.push(`年${fmt(b.year_usage)}`);
+      return parts.join("·");
+    }).find(x=>x) || "-";
+    const totalAmount = list.reduce((s,b)=>s+(b.amount||0),0);
+    const pct = totalAmount>0 ? (amount/totalAmount*100).toFixed(1) : "0.0";
+    return `<tr>
+      <td><span class="tag tag-${tt}">${meta.name}</span></td>
+      <td>${rs.length}</td>
+      <td>${fmt(usage)} ${meta.unit}</td>
+      <td style="font-size:11px;color:var(--sub)">${detailTxt}</td>
+      <td style="font-size:11px;color:var(--sub)">${tierInfo}</td>
+      <td>¥${fmt(amount)}</td>
+      <td>${pct}%</td>
+    </tr>`;
+  }).join("");
+  const totalAmount = list.reduce((s,b)=>s+(b.amount||0),0);
+  el.innerHTML = `<div class="summary-wrap"><table><thead><tr><th>类型</th><th>条数</th><th>用量合计</th><th>分项明细</th><th>档位</th><th>费用合计</th><th>费用占比</th></tr></thead>
+    <tbody>${rows}</tbody>
+    <tfoot><tr><td><b>合计</b></td><td><b>${list.length}</b></td><td></td><td></td><td></td><td><b>¥${fmt(totalAmount)}</b></td><td>100%</td></tr></tfoot></table></div>`;
+}
+
+renderTabs(); renderStats(); renderTable(); renderTrend(); renderEnergyDetail(); renderSummary();
+</script>
+</body>
+</html>
