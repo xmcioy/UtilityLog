@@ -26,6 +26,10 @@ auth_config.json
 db_config.json
 *.log
 *.bak
+# 任意名字的凭据文件（含明文密码的备份、临时导出）
+*cred*.json
+*secret*.json
+*token*.json
 
 # --- Python / macOS ---
 __pycache__/
@@ -34,3 +38,12 @@ __pycache__/
 
 # 根目录误生成的空库副本
 utility.db
+*.sqlite
+*.sqlite3
+
+# --- 编辑器 / 工具临时文件 ---
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
