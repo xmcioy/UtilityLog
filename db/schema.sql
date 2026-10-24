@@ -1,9 +1,10 @@
 -- ============================================================
 -- UtilityLog 数据库 Schema（SQLite）
--- 版本: 0.2.0
+-- 版本: 0.3.0
 -- 说明:
 --   - 多用户（users / api_tokens / user_settings）已启用
 --   - families 与 bills_* 均带 user_id，数据按用户隔离
+--   - 双后端：SQLite（本文件）/ MySQL（schema.mysql.sql）语义等价
 -- ============================================================
 
 PRAGMA foreign_keys = ON;

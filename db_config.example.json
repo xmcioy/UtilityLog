@@ -1,0 +1,11 @@
+{
+  "backend": "mysql",
+  "mysql": {
+    "host": "127.0.0.1",
+    "port": 9306,
+    "user": "ul_app",
+    "password": "CHANGE_ME_STRONG_RANDOM_PASSWORD",
+    "database": "utilitylog",
+    "charset": "utf8mb4"
+  }
+}

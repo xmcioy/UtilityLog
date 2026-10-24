@@ -1,25 +1,27 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-UtilityLog 水电气账单数据管理脚本（0.2 多用户版）
+UtilityLog 水电气账单数据管理脚本（0.3 双后端版）
 - 多用户隔离（users + families.user_id + bills_*.user_id）
+- 后端：SQLite 默认（<APP_DIR>/data/utility.db），MySQL 可选（UL_BACKEND=mysql + db_config.json）
+- 运行目录：UL_APP_DIR（优先）→ UL_ROOT → 仓库根；配置凭据 auth_config.json 位于运行目录
 - 支持 add / list / update / delete / add-family / list-users / init
 - 所有数据操作按用户隔离，命令行 --user 指定操作者（默认取配置凭据用户）
-- 数据文件: <项目根>/data/utility.db（项目根由 UL_ROOT 环境变量或脚本位置推导）
 """
 import argparse
 import hashlib
 import json
 import os
 import secrets
-import sqlite3
 import sys
 from datetime import datetime
 from pathlib import Path
 
-PROJECT_ROOT = Path(os.environ.get("UL_ROOT", Path(__file__).resolve().parent.parent))
-DB_PATH = os.environ.get("UL_DB", str(PROJECT_ROOT / "data" / "utility.db"))
-CONFIG_FILE = PROJECT_ROOT / "auth_config.json"
+import db_backend
+
+APP_DIR = db_backend.resolve_app_dir()
+DB_PATH = os.environ.get("UL_DB", str(APP_DIR / "data" / "utility.db"))
+CONFIG_FILE = APP_DIR / "auth_config.json"
 VALID_TYPES = ("water", "electric", "gas")
 TYPE_NAMES = {"water": "水费", "electric": "电费", "gas": "燃气费"}
 
@@ -47,9 +49,7 @@ DEFAULT_USER, _ = load_credentials()
 
 
 def get_conn():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+    return db_backend.get_conn()
 
 
 def user_id_by_name(username):
@@ -78,128 +78,22 @@ def hash_password(password: str) -> str:
     return f"pbkdf2_sha256$120000${salt.hex()}${digest.hex()}"
 
 
+def _schema_file(name):
+    # schema 文件位于仓库 db/ 下（源码随仓库走，与运行目录解耦）
+    repo = Path(__file__).resolve().parent.parent
+    return repo / "db" / name
+
+
 def init_db():
     conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS families (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            user_id INTEGER REFERENCES users(id),
-            created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-            UNIQUE(user_id, name)
-        )
-    """)
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS bills_water (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            family_id INTEGER NOT NULL REFERENCES families(id),
-            user_id INTEGER REFERENCES users(id),
-            bill_month TEXT NOT NULL,          -- YYYY-MM
-            usage REAL,                        -- 用量
-            usage_unit TEXT DEFAULT 'm³',
-            prev_reading REAL,
-            cur_reading REAL,
-            water_unit_price REAL,             -- 水费单价（元/m³）
-            sewage_unit_price REAL,            -- 污水单价（元/m³）
-            water_fee REAL,                    -- 水费金额
-            sewage_fee REAL,                   -- 污水费金额
-            amount REAL,                       -- 费用合计（元）
-            bill_date TEXT,                    -- 账单日期 YYYY-MM-DD
-            image TEXT,                        -- 截图路径（相对 site/images）
-            note TEXT,
-            current_tier TEXT,
-            tier_remaining REAL,
-            year_usage REAL,
-            tier_detail TEXT,                  -- JSON 字符串
-            created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-            UNIQUE(family_id, bill_month)
-        )
-    """)
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS bills_electric (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            family_id INTEGER NOT NULL REFERENCES families(id),
-            user_id INTEGER REFERENCES users(id),
-            bill_month TEXT NOT NULL,          -- YYYY-MM
-            usage REAL,                        -- 总用量（kWh）
-            usage_unit TEXT DEFAULT 'kWh',
-            prev_reading REAL,
-            cur_reading REAL,
-            unit_price REAL,                   -- 综合单价（元/kWh）
-            peak_prev_reading REAL,
-            peak_cur_reading REAL,
-            valley_prev_reading REAL,
-            valley_cur_reading REAL,
-            peak_usage REAL,
-            peak_price REAL,
-            valley_usage REAL,
-            valley_price REAL,
-            amount REAL,                       -- 费用合计（元）
-            bill_date TEXT,
-            image TEXT,
-            note TEXT,
-            current_tier TEXT,
-            tier_remaining REAL,
-            year_usage REAL,
-            tier_detail TEXT,
-            created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-            UNIQUE(family_id, bill_month)
-        )
-    """)
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS bills_gas (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            family_id INTEGER NOT NULL REFERENCES families(id),
-            user_id INTEGER REFERENCES users(id),
-            bill_month TEXT NOT NULL,          -- YYYY-MM
-            usage REAL,                        -- 用量
-            usage_unit TEXT DEFAULT 'm³',
-            prev_reading REAL,
-            cur_reading REAL,
-            unit_price REAL,                   -- 单价（元/m³）
-            amount REAL,                       -- 费用（元）
-            bill_date TEXT,
-            image TEXT,
-            note TEXT,
-            current_tier TEXT,
-            tier_remaining REAL,
-            year_usage REAL,
-            tier_detail TEXT,
-            created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-            UNIQUE(family_id, bill_month)
-        )
-    """)
-    cur.executescript("""
-    CREATE TABLE IF NOT EXISTS users (
-        id            INTEGER PRIMARY KEY AUTOINCREMENT,
-        username      TEXT NOT NULL UNIQUE,
-        password_hash TEXT NOT NULL,
-        display_name  TEXT,
-        created_at    TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-        is_active     INTEGER NOT NULL DEFAULT 1
-    );
-    CREATE TABLE IF NOT EXISTS api_tokens (
-        id         INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id    INTEGER NOT NULL REFERENCES users(id),
-        token      TEXT NOT NULL UNIQUE,
-        scope      TEXT NOT NULL DEFAULT 'bill:write',
-        expires_at TEXT,
-        created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-        last_used  TEXT
-    );
-    CREATE TABLE IF NOT EXISTS user_settings (
-        user_id         INTEGER PRIMARY KEY REFERENCES users(id),
-        model_api_base  TEXT,
-        model_api_key   TEXT,
-        model_name      TEXT,
-        theme           TEXT DEFAULT 'light',
-        updated_at      TEXT
-    );
-    """)
+    schema = _schema_file("schema.mysql.sql" if db_backend.get_backend() == "mysql" else "schema.sql")
+    if not schema.exists():
+        print(f"error: schema file not found: {schema}")
+        sys.exit(1)
+    conn.executescript(schema.read_text(encoding="utf-8"))
     conn.commit()
     conn.close()
-    print("db initialized (users / families / bills_water / bills_electric / bills_gas)")
+    print(f"db initialized ({db_backend.get_backend()}: users / families / bills_water / bills_electric / bills_gas)")
 
 
 def register_user(username, password, display_name=None):
@@ -208,12 +102,11 @@ def register_user(username, password, display_name=None):
         sys.exit(1)
     conn = get_conn()
     try:
-        cur = conn.cursor()
-        cur.execute("INSERT INTO users(username, password_hash, display_name) VALUES (?,?,?)",
-                    (username, hash_password(password), display_name or username))
+        cur = conn.execute("INSERT INTO users(username, password_hash, display_name) VALUES (?,?,?)",
+                           (username, hash_password(password), display_name or username))
         conn.commit()
         print(f"user registered: {username} (id={cur.lastrowid})")
-    except sqlite3.IntegrityError:
+    except Exception:
         print(f"user already exists: {username}")
     finally:
         conn.close()
@@ -223,11 +116,10 @@ def add_family(name, user):
     uid = require_user(user, "add-family")
     conn = get_conn()
     try:
-        cur = conn.cursor()
-        cur.execute("INSERT INTO families(name, user_id) VALUES (?,?)", (name, uid))
+        cur = conn.execute("INSERT INTO families(name, user_id) VALUES (?,?)", (name, uid))
         conn.commit()
         print(f"family added: {name} (id={cur.lastrowid}, user={user})")
-    except sqlite3.IntegrityError:
+    except Exception:
         print(f"family already exists: {name}")
     finally:
         conn.close()
@@ -343,17 +235,19 @@ def add_bill(family, month, btype, usage, amount, user=None, bill_date=None, ima
                           peak_prev_reading=peak_prev_reading, peak_cur_reading=peak_cur_reading,
                           valley_prev_reading=valley_prev_reading, valley_cur_reading=valley_cur_reading)
     cols = list(dict.fromkeys(["usage", "amount"] + [k for k in TABLE_FIELDS[btype] if fields.get(k) is not None]))
-    placeholders = ",".join("?" for _ in cols)
-    upserts = ",".join(f"{c}=excluded.{c}" for c in cols)
+    # upsert 字段（排除 NULL；为空时全列兜底）
+    upd_cols = cols if cols else TABLE_FIELDS[btype]
     vals = [fields[c] for c in cols]
+    sql = db_backend.upsert_sql(
+        table,
+        ["family_id", "user_id", "bill_month"] + cols,
+        len(cols) + 3,
+        ["family_id", "bill_month"],
+        upd_cols,
+    )
     conn = get_conn()
     try:
-        conn.execute(
-            f"INSERT INTO {table}(family_id, user_id, bill_month, {', '.join(cols)}) "
-            f"VALUES (?,?,?,{placeholders}) "
-            f"ON CONFLICT(family_id, bill_month) DO UPDATE SET {upserts}",
-            [fid, uid, month] + vals,
-        )
+        conn.execute(sql, [fid, uid, month] + vals)
         conn.commit()
         row = conn.execute(
             f"SELECT id FROM {table} WHERE family_id=? AND bill_month=? AND user_id=?",
@@ -459,11 +353,19 @@ def query_bills(user, where="", args=(), order="month DESC, type, id DESC"):
         return []
     conn = get_conn()
     # 外层只能引用 UNION 输出列（user_id），不能引用内层表别名
-    sql = (f"SELECT * FROM ({UNION_COLS}) WHERE user_id=? {where} "
+    sql = (f"SELECT * FROM ({UNION_COLS}) AS u WHERE user_id=? {where} "
            f"ORDER BY {order}")
     rows = conn.execute(sql, [uid] + list(args)).fetchall()
     conn.close()
-    return [dict(r) for r in rows]
+    # MySQL DATETIME 返回 datetime 对象，统一转 ISO 字符串保证 JSON 可序列化
+    out = []
+    for r in rows:
+        d = dict(r)
+        for k, v in d.items():
+            if isinstance(v, datetime):
+                d[k] = v.isoformat(sep=" ", timespec="seconds")
+        out.append(d)
+    return out
 
 
 def list_bills(user, family=None, month=None, btype=None):
@@ -494,7 +396,7 @@ def dump_json(user):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="UtilityLog 水电气账单管理（多用户）")
+    parser = argparse.ArgumentParser(description="UtilityLog 水电气账单管理（多用户，SQLite/MySQL 双后端）")
     parser.add_argument("--user", default=DEFAULT_USER, help="操作用户名（默认取配置凭据用户）")
     sub = parser.add_subparsers(dest="cmd", required=True)
 

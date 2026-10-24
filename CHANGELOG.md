@@ -4,12 +4,25 @@ All notable changes to this project will be documented in this file.
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [0.3.0] - 2026-10-24
 
-### 规划（0.3）
-- 设置页：通用模型 API 配置 + 用户模型 Token
-- 网页端图片/文字直接上传录入（配模型 API 自动解析）
-- 手工编辑/删除账单入口
+### 新增
+- 双后端存储抽象：`scripts/db_backend.py` 统一 SQLite / MySQL 方言（upsert、自增、时间函数、占位符、类型），默认 SQLite 零依赖
+- MySQL 部署支持：`db/schema.mysql.sql`（与 SQLite 语义等价）、`db_config.example.json` 模板、专属低权限用户权限隔离（`ul_app` 仅可访问 `utilitylog.*`）
+- 源码 / 运行目录分离：`UL_APP_DIR` 环境变量指向运行目录（数据 / 配置 / 日志 / images / site/data.js），静态模板仍由源码 `site/` 提供；解析顺序 `UL_APP_DIR` > `UL_ROOT` > 源码根
+- MySQL 后端端到端验证：init / 注册 / 登录 / 数据隔离 / 增删改查全部通过；专属用户跨库访问被拒（1142）
+- launchd plist 与 nginx 本地部署更新至新路径，站点登录 / 注册 / 数据页验证通过
+
+### 变更
+- `auth_server.py` / `scripts/utility.py` / `scripts/sync_site.py` 路径逻辑与后端选择统一走 `db_backend.py` 与 `UL_APP_DIR`
+- 仓库迁移至 `~/project/UtilityLog`（保留 git 历史与 remote），运行产物迁至 `~/myapp/utilitylog`
+- `docs/DESIGN.md` / `docs/INSTALL.md` / README 中英文更新至 0.3.0：双后端架构、源码 / 运行目录结构、MySQL 部署手册
+- `db/schema.sql` 标注 0.3.0，新增 `db/schema.mysql.sql`
+
+### 说明
+- 真实 MySQL 连接配置仅存于运行目录 `db_config.json`（gitignore），仓库仅保留脱敏模板
+- root 管理凭据仅用于建库建用户，不入库不入配置
+- 推送前已用 `git ls-files` + `git grep` 扫描确认仓库不含个人信息 / 真实配置
 
 ## [0.2.0] - 2026-10-24
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""UtilityLog 站点认证网关（0.2 多用户版：Cookie 会话 + Bearer Token + Basic 兼容）
+"""UtilityLog 站点认证网关（0.3 双后端版：Cookie 会话 + Bearer Token + Basic 兼容）
 监听 127.0.0.1:8099，nginx 反代全部请求到此：
   - POST /register  注册新用户（users 表存 PBKDF2 哈希），成功即登录
   - POST /login      校验 users 表用户名密码，种 180 天 HttpOnly Cookie，302 到 /
@@ -10,9 +10,12 @@
                      否则页面请求回 login.html、脚本请求回 401
 
 凭据说明：
-  - 登录/注册均基于 SQLite users 表（password_hash，PBKDF2-SHA256）
+  - 登录/注册基于 users 表（password_hash，PBKDF2-SHA256）
   - 仓库内不含任何真实密码；本地 auth_config.json 仅用于 0.2 迁移脚本创建初始用户
-会话/API token 持久化于 SQLite api_tokens 表（绑定 user_id）
+  - 后端：SQLite 默认 / MySQL 可选（UL_BACKEND + 运行目录 db_config.json）
+  - 路径：静态模板取自源码 site/（随仓库），运行时数据（data/、db、日志、配置）位于
+    运行目录 APP_DIR（UL_APP_DIR 优先 → UL_ROOT → 仓库根）
+会话/API token 持久化于 api_tokens 表（绑定 user_id）
 """
 import base64
 import hashlib
@@ -26,11 +29,14 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-PROJECT_ROOT = Path(os.environ.get("UL_ROOT", Path(__file__).resolve().parent))
-ROOT = PROJECT_ROOT / "site"
-DB_PATH = os.environ.get("UL_DB", str(PROJECT_ROOT / "data" / "utility.db"))
-SCRIPTS = str(PROJECT_ROOT / "scripts")
-sys.path.insert(0, SCRIPTS)
+sys.path.insert(0, str(Path(__file__).resolve().parent / "scripts"))
+import db_backend  # noqa: E402
+
+APP_DIR = db_backend.resolve_app_dir()
+DB_PATH = os.environ.get("UL_DB", str(APP_DIR / "data" / "utility.db"))
+ROOT = Path(__file__).resolve().parent / "site"   # 源码静态模板（随仓库）
+SCRIPTS = str(Path(__file__).resolve().parent / "scripts")
+sys.path.insert(0, SCRIPTS)  # 幂等
 from utility import dump_json, user_id_by_name  # noqa: E402
 
 COOKIE_NAME = "ul_token"
@@ -41,10 +47,77 @@ _lock = threading.Lock()
 
 
 def get_conn():
-    import sqlite3
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+    return db_backend.get_conn()
+
+
+# ---------------- 建表（auth 相关，按后端方言） ----------------
+
+def ensure_auth_tables():
+    """确保 users / api_tokens / user_settings 存在（启动时调用）"""
+    conn = get_conn()
+    try:
+        if db_backend.get_backend() == "mysql":
+            ddl = """
+            CREATE TABLE IF NOT EXISTS users (
+                id BIGINT NOT NULL AUTO_INCREMENT,
+                username VARCHAR(64) NOT NULL,
+                password_hash VARCHAR(512) NOT NULL,
+                display_name VARCHAR(128),
+                created_at DATETIME NOT NULL DEFAULT NOW(),
+                is_active TINYINT NOT NULL DEFAULT 1,
+                PRIMARY KEY (id), UNIQUE KEY uq_users_username (username)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            CREATE TABLE IF NOT EXISTS api_tokens (
+                id BIGINT NOT NULL AUTO_INCREMENT,
+                user_id BIGINT NOT NULL,
+                token VARCHAR(255) NOT NULL,
+                scope VARCHAR(32) NOT NULL DEFAULT 'bill:write',
+                expires_at VARCHAR(32),
+                created_at DATETIME NOT NULL DEFAULT NOW(),
+                last_used VARCHAR(32),
+                PRIMARY KEY (id), UNIQUE KEY uq_api_tokens_token (token)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            CREATE TABLE IF NOT EXISTS user_settings (
+                user_id BIGINT NOT NULL PRIMARY KEY,
+                model_api_base VARCHAR(512),
+                model_api_key TEXT,
+                model_name VARCHAR(128),
+                theme VARCHAR(16) DEFAULT 'light',
+                updated_at VARCHAR(32)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            """
+        else:
+            ddl = """
+            CREATE TABLE IF NOT EXISTS users (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                username      TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                display_name  TEXT,
+                created_at    TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+                is_active     INTEGER NOT NULL DEFAULT 1
+            );
+            CREATE TABLE IF NOT EXISTS api_tokens (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id    INTEGER NOT NULL REFERENCES users(id),
+                token      TEXT NOT NULL UNIQUE,
+                scope      TEXT NOT NULL DEFAULT 'bill:write',
+                expires_at TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+                last_used  TEXT
+            );
+            CREATE TABLE IF NOT EXISTS user_settings (
+                user_id         INTEGER PRIMARY KEY REFERENCES users(id),
+                model_api_base  TEXT,
+                model_api_key   TEXT,
+                model_name      TEXT,
+                theme           TEXT DEFAULT 'light',
+                updated_at      TEXT
+            );
+            """
+        conn.executescript(ddl)
+        conn.commit()
+    finally:
+        conn.close()
 
 
 # ---------------- 用户与 Token 存取 ----------------
@@ -345,6 +418,7 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+    ensure_auth_tables()
     server = ThreadingHTTPServer(("127.0.0.1", 8099), Handler)
-    print("UtilityLog auth gateway (0.2 multi-user) listening on 127.0.0.1:8099", flush=True)
+    print(f"UtilityLog auth gateway (0.3, backend={db_backend.get_backend()}) listening on 127.0.0.1:8099", flush=True)
     server.serve_forever()

@@ -13,57 +13,76 @@ UtilityLog is a self-hosted utility bill (water / electricity / gas) tracker for
 - **阶梯计费记录**：当前档位、本档剩余、年累计用量、档位明细 JSON
 - **密码保护的网页**：Cookie 180 天免登录 + Basic Auth 兼容，nginx 反代，静态站点（ECharts 图表 + 表格）
 - **AI 技能录入**：截图 / PDF 账单 → 视觉解析 → 本地 SQLite → 网页同步 → 腾讯文档表格覆盖式同步
-- **数据三端同步**：本地 SQLite（source of truth）→ 静态站点 data.js → 腾讯文档在线表格
+- **双后端存储（0.3）**：SQLite 默认零依赖，可切换 MySQL 8+（专属低权限用户，权限隔离）
+- **源码 / 运行分离（0.3）**：仓库仅代码 / 模板 / 文档 / 脱敏示例，真实配置与数据落运行目录（UL_APP_DIR），gitignore 不入库
+- **数据三端同步**：本地数据库（source of truth）→ 静态站点 data.js → 腾讯文档在线表格
 - **隐私友好**：本地私有数据（数据库、截图、token、配置）全部 gitignore，开源仓库零敏感信息
 
-## Repository layout
+## Repository layout (0.3: source / runtime separated)
 
 ```
-UtilityLog/
-├── auth_server.py          # 认证网关（登录/登出/静态文件）
-├── auth_config.example.json# 凭据配置文件模板（复制为 auth_config.json 并填写）
+UtilityLog/                        # source repo (public-safe only)
+├── auth_server.py                 # auth gateway (login/register/logout, dual backend)
+├── auth_config.example.json       # credential template (real config lives in runtime dir)
+├── db_config.example.json         # MySQL connection template (real config lives in runtime dir)
 ├── db/
-│   └── schema.sql          # 建表 DDL（含 0.2 多用户规划）
+│   ├── schema.sql                 # SQLite DDL (0.3 multi-user)
+│   └── schema.mysql.sql           # MySQL DDL (0.3, semantically equivalent)
 ├── scripts/
-│   ├── utility.py          # CLI：init / add-family / add / list / update / delete / dump
-│   └── sync_site.py        # SQLite → site/data.js 并刷新版本号
-├── site/                   # 前端静态站点（index.html + vendor/echarts.min.js）
+│   ├── utility.py                 # CLI: init / register / add-family / add / list / update / delete / dump
+│   ├── sync_site.py               # DB → site/data.js + Tencent Docs sync
+│   └── db_backend.py              # SQLite / MySQL dialect abstraction (0.3)
+├── site/                          # frontend static templates (index.html + vendor/echarts.min.js)
 ├── skill/
-│   └── SKILL.md            # AI 技能（Marvis 风格），开源脱敏模板
+│   └── SKILL.md                   # AI skill (Marvis style), sanitized template
 ├── docs/
-│   ├── DESIGN.md           # 设计文档（表结构/程序逻辑/展示设计/修订记录）
-│   ├── INSTALL.md          # 传统命令安装指南（中文）
-│   └── AI_AGENTS.md        # AI 客户端（Codex / Workbuddy）安装指令
+│   ├── DESIGN.md                  # design doc (schema / program logic / display / changelog)
+│   ├── INSTALL.md                 # install guide (中文) incl. MySQL deployment
+│   └── AI_AGENTS.md               # one-shot prompt for AI coding agents
 ├── README.md / README.zh-CN.md / CHANGELOG.md / LICENSE
+
+runtime dir (e.g. ~/myapp/utilitylog, gitignored)
+├── data/utility.db                # SQLite DB (default backend)
+├── db_config.json                 # MySQL connection config (backend=mysql)
+├── auth_config.json               # real initial credentials
+├── images/  site/data.js  auth_server.log  temp* ...
 ```
+
+Runtime dir resolution: `UL_APP_DIR` > `UL_ROOT` > source root. Backend: `UL_BACKEND=sqlite|mysql` > `db_config.json` > default `sqlite`.
 
 ## Quick start (traditional)
 
 ```bash
 git clone <repo-url> UtilityLog && cd UtilityLog
 
+# 0. (optional) separate runtime dir for local data/config
+export UL_APP_DIR=~/myapp/utilitylog && mkdir -p "$UL_APP_DIR"
+
 # 1. 初始化数据库
 python3 scripts/utility.py init
-python3 scripts/utility.py add-family 我的家
+python3 scripts/utility.py --user <user> register <user> <pass>   # 注册用户（0.2+ 多用户）
+python3 scripts/utility.py --user <user> add-family 我的家
 
 # 2. 配置认证凭据（环境变量或配置文件）
-cp auth_config.example.json auth_config.json
+cp auth_config.example.json "$UL_APP_DIR/auth_config.json"
 # 编辑 auth_config.json 填写 user / pass
 
 # 3. 启动认证网关（监听 127.0.0.1:8099）
 python3 auth_server.py
 
 # 4. 录入账单
-python3 scripts/utility.py add --type water --family 我的家 --month 2026-10 \
+python3 scripts/utility.py --user <user> add --type water --family 我的家 --month 2026-10 \
   --usage 12.5 --amount 50.63 --water-fee 28.13 --sewage-fee 22.50 \
   --water-unit-price 2.25 --sewage-unit-price 2.00 \
   --current-tier 第一档 --tier-remaining 207.5 --year-usage 12.5
 
-# 5. 同步网页数据
+# 5. 同步网页数据（可选，0.3 起网关 /data.js 动态导出）
 python3 scripts/sync_site.py
 
 # 6. nginx 反代：将你的域名/端口反代到 127.0.0.1:8099（详见 docs/INSTALL.md）
 ```
+
+MySQL backend: create DB + dedicated low-priv user, write `db_config.json` into runtime dir, then `UL_BACKEND=mysql python3 scripts/utility.py init`. See [docs/INSTALL.md](docs/INSTALL.md) §2.5.
 
 Full commands and nginx config: [docs/INSTALL.md](docs/INSTALL.md) (中文) / [docs/INSTALL.en.md](docs/INSTALL.en.md) (English, optional).
 
@@ -71,20 +90,25 @@ Full commands and nginx config: [docs/INSTALL.md](docs/INSTALL.md) (中文) / [d
 
 Copy the one-shot prompt in [docs/AI_AGENTS.md](docs/AI_AGENTS.md) into Codex / Workbuddy / any agentic CLI. The agent will clone, init, configure credentials, start the gateway and sync the site automatically.
 
-## Multi-user roadmap (0.2)
+## Roadmap
 
-- 注册 / 登录，每用户独立账单
-- 用户 token 供 AI skill 调用
+### 0.3 (implemented)
+- SQLite 默认 + MySQL 双后端（`db_backend.py` 方言抽象）
+- 源码 / 运行目录分离（`UL_APP_DIR` 可配，真实配置与数据不入库）
+- MySQL 专属低权限用户 + 权限隔离，schema.mysql.sql / db_config.example.json
+- launchd / nginx 本地部署
+
+### 0.4 (planned)
 - 网页手工编辑账单
 - 设置页配置通用模型 API 与用户模型 token
 - 配 API 后网页直接上传图文记录
 - skill 与网页双录入均支持
 
-Schema for these tables is already planned in [db/schema.sql](db/schema.sql) (see migration comments) and [docs/DESIGN.md](docs/DESIGN.md).
+Schema for these tables is already planned in [db/schema.sql](db/schema.sql) (see migration comments), [db/schema.mysql.sql](db/schema.mysql.sql) and [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Tech stack
 
-Python 3 (stdlib only, no pip dependencies) · SQLite · HTML/JS + ECharts · nginx (optional) · Cloudflare Tunnel (optional, for public access)
+Python 3 (stdlib only, no pip dependencies; optional pymysql for MySQL) · SQLite / MySQL 8+ · HTML/JS + ECharts · nginx (optional) · Cloudflare Tunnel (optional, for public access)
 
 ## License
 

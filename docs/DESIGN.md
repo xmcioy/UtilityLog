@@ -1,16 +1,16 @@
 # UtilityLog 设计文档（DESIGN.md）
 
-> 版本：0.2.0（2026-10-24）
+> 版本：0.3.0（2026-10-24）
 > 目标读者：开发者 / AI 客户端（Codex、WorkBuddy 等）——任何需要理解本项目结构、意图或做后续修复改造的角色。
-> 本文档与 `db/schema.sql`、`CHANGELOG.md` 同步维护；代码实现偏离本文档时必须更新文档。
+> 本文档与 `db/schema.sql`、`db/schema.mysql.sql`、`CHANGELOG.md` 同步维护；代码实现偏离本文档时必须更新文档。
 
 ---
 
 ## 1. 项目概述
 
-UtilityLog 是一个**家庭水电气账单记录与展示系统**：用户把每月水费、电费、燃气费账单（截图 / PDF / 文字）交给 AI 助手，AI 解析字段后写入本地 SQLite 数据库，再同步到静态网页（nginx 托管）供随时查看，并可选同步腾讯文档在线表格。
+UtilityLog 是一个**家庭水电气账单记录与展示系统**：用户把每月水费、电费、燃气费账单（截图 / PDF / 文字）交给 AI 助手，AI 解析字段后写入本地数据库（SQLite 默认，可切换 MySQL），再同步到静态网页（nginx 托管）供随时查看，并可选同步腾讯文档在线表格。
 
-### 1.1 当前架构（0.2 多用户）
+### 1.1 当前架构（0.3 双后端 + 目录分离）
 
 ```
 用户注册/登录（users 表，password_hash 存库）
@@ -19,7 +19,9 @@ UtilityLog 是一个**家庭水电气账单记录与展示系统**：用户把�
   AI 助手 / Skill（utility-bill-recorder）
         │  utility.py add --user <user> --type <water|electric|gas>
         ▼
-  SQLite（data/utility.db）
+  存储后端（db_backend.py 抽象，UL_BACKEND 切换）
+  ├─ SQLite（默认，data/utility.db）
+  └─ MySQL（可选，utilitylog 库 + 专属低权限用户）
   ├─ users（账号，PBKDF2 哈希）
   ├─ families（家庭，user_id 归属）
   ├─ bills_water（水费，user_id 归属）
@@ -37,10 +39,18 @@ UtilityLog 是一个**家庭水电气账单记录与展示系统**：用户把�
   浏览器访问：每用户只看到本人数据
 ```
 
+目录分离（0.3 起）：
+
+- **源码仓库** `~/project/UtilityLog`：代码、模板、文档、脱敏示例配置（.git 保留全部历史，仅含公开安全内容）。
+- **运行目录** `~/myapp/utilitylog`：数据库、图片、日志、真实配置（auth_config.json / db_config.json / .auth_tokens.json 等），全部 gitignore，不入库。
+- 路径由环境变量 `UL_APP_DIR`（或回退 `UL_ROOT` / 仓库根）解析，保持默认值可回退。
+
 ### 1.2 演进目标（0.2+，多用户）
 
 - [x] 注册 / 登录，每用户独立账单
 - [x] 每用户 API Token（api_tokens 表），供 Skill / 外部程序远程录入
+- [x] SQLite 默认 + MySQL 双后端（db_backend.py 抽象，方言兼容）
+- [x] 源码 / 运行目录分离（UL_APP_DIR 可配，运行产物与真实配置不入库）
 - [ ] 网页手工编辑
 - [ ] 设置页配置通用模型 API 与用户模型 Token
 - [ ] 配好模型 API 后，网页可直接上传图文记录（图片走 OCR / 多模态解析，文字走 LLM 抽取）
@@ -48,38 +58,47 @@ UtilityLog 是一个**家庭水电气账单记录与展示系统**：用户把�
 
 ---
 
-## 2. 目录结构
+## 2. 目录结构（0.3 起：源码 / 运行分离）
 
 ```
-UtilityLog/
-├── auth_server.py         认证网关（Cookie 登录校验、/login）
+源码仓库 ~/project/UtilityLog/
+├── auth_server.py         认证网关（Cookie 登录校验、/login；0.3 双后端）
 ├── scripts/
-│   ├── utility.py         数据管理 CLI（init/add/update/delete/list/dump）
-│   └── sync_site.py       数据库 → site/data.js 导出 + 腾讯文档同步
+│   ├── utility.py         数据管理 CLI（init/register/add/update/delete/list/dump）
+│   ├── sync_site.py       数据库 → site/data.js 导出 + 腾讯文档同步
+│   └── db_backend.py      0.3 双后端抽象（SQLite / MySQL，方言转换）
 ├── site/
 │   ├── index.html         主展示页（趋势图/汇总/明细/用能明细）
 │   ├── login.html         登录页
-│   ├── data.js            由 sync_site.py 生成（不入库）
-│   ├── vendor/            echarts.min.js 等前端依赖
-│   └── images → ../images （软链，本地截图）
-├── data/
-│   └── utility.db         SQLite 数据库（不入库）
-├── images/                账单截图按 YYYY-MM 归档（不入库）
-├── skill/
-│   └── SKILL.md           记录技能（开源模板版，敏感信息用占位符）
+│   └── vendor/            echarts.min.js 等前端依赖
 ├── db/
-│   ├── schema.sql         建表语句（0.2：users + user_id 隔离）
+│   ├── schema.sql         建表语句（SQLite 0.3，users + user_id 隔离）
+│   ├── schema.mysql.sql   建表语句（MySQL 0.3，与 SQLite 语义等价）
 │   └── migrations/
 │       └── migrate_multiuser.py   0.1 → 0.2 迁移（备份 + 建表 + 数据归属 hh）
 ├── docs/
 │   ├── DESIGN.md          本文档
-│   ├── INSTALL.md         安装部署指南（传统命令 + AI 客户端）
+│   ├── INSTALL.md         安装部署指南（传统命令 + AI 客户端 + MySQL）
 │   └── AI_AGENTS.md       AI 客户端（Codex/WorkBuddy）指令安装说明
+├── auth_config.example.json  凭据配置模板（真实 auth_config.json 放运行目录）
+├── db_config.example.json    MySQL 连接配置模板（真实 db_config.json 放运行目录）
 ├── README.md              中英文双语说明
 ├── CHANGELOG.md           修订记录
 ├── LICENSE                MIT
 └── .gitignore             排除本地私有数据
+
+运行目录 ~/myapp/utilitylog/（不入库）
+├── data/utility.db        SQLite 数据库（UL_BACKEND=sqlite 时）
+├── db_config.json         MySQL 连接配置（UL_BACKEND=mysql 时，gitignore）
+├── auth_config.json       初始账号配置（gitignore）
+├── .auth_tokens.json      令牌令牌兜底存储（gitignore）
+├── images/                账单截图按 YYYY-MM 归档（gitignore）
+├── site/data.js           站点数据导出（gitignore）
+├── .htpasswd / auth_server.log / temp*  运行产物（gitignore）
 ```
+
+> `site/` 静态模板始终来自源码仓库；`site/images` 软链到运行目录 `images/`。
+> 路径解析优先级：`UL_APP_DIR` > `UL_ROOT` > 仓库根（`Path(__file__).resolve().parent.parent`）。
 
 ---
 
@@ -192,8 +211,9 @@ UtilityLog/
 3. **三表 UNION 统一投影**：`UNION_COLS` 把三张表投影为同一列集（非本表字段为 NULL），前端 / sync_site 无需感知拆表细节；兼容旧字段别名 `sewage_price`。
 4. **档位 JSON**：`tier_detail` 存 JSON 字符串，写入时 `json.dumps`，读取时原样输出。
 5. **用户隔离（0.2）**：所有查询/写入强制带 `user_id`（由 `--user` 解析）；家庭名只在同一用户内唯一；`list/update/delete` 找不到他人数据时如实报错；`DEFAULT_USER` 读取 `UL_USER` 或 `auth_config.json`，未配置则必须显式传 `--user`。
-6. **路径解析（0.1 开源化）**：项目根由 `Path(__file__).resolve().parent.parent` 推导，数据库默认 `data/utility.db`，可用环境变量 `UL_ROOT` 覆盖（详见 INSTALL.md）。
-7. **缺项不编造**：CLI 只写用户/解析出的字段，缺失留 NULL；上游解析层（Skill）负责提示缺失。
+6. **路径解析（0.3 目录分离）**：运行目录由 `UL_APP_DIR` > `UL_ROOT` > 仓库根（`Path(__file__).resolve().parent.parent`）推导；数据库默认 `{运行目录}/data/utility.db`（SQLite）或读 `{运行目录}/db_config.json`（MySQL），详见 INSTALL.md。
+7. **双后端（0.3）**：`db_backend.py` 提供 `get_conn()` / `get_backend()`，后端由环境变量 `UL_BACKEND`（sqlite|mysql）选择，缺省读运行目录 `db_config.json` 的 `backend` 字段，再缺省为 `sqlite`；SQL 方言差异（upsert / 自增 / 时间函数 / 占位符 / 类型）在 `db_backend._mysql_sql()` 中统一改写，业务 SQL 保持 SQLite 方言书写。
+8. **缺项不编造**：CLI 只写用户/解析出的字段，缺失留 NULL；上游解析层（Skill）负责提示缺失。
 
 ### 4.2 scripts/sync_site.py（站点同步 + 腾讯文档）
 
@@ -232,10 +252,27 @@ API 鉴权（三选一，按序）：
 ```
 
 0.1 开源化要点：
-- **凭据不再硬编码**：改为环境变量 `UL_USER` / `UL_PASS` 或配置文件 `auth_config.json`（模板见 `auth_config.example.json`，真实配置不入库）。
+- **凭据不再硬编码**：改为环境变量 `UL_USER` / `UL_PASS` 或配置文件 `auth_config.json`（模板见 `auth_config.example.json`，真实配置放运行目录，不入库）。
 - 0.2 起凭据仅用于**创建/校验初始账号 hh**；用户注册/登录走 `users` 表。
+- 0.3 起连接层走 `db_backend`：默认 SQLite；`UL_BACKEND=mysql` 时读取运行目录 `db_config.json`（host/port/user/password/db），建库/建表/令牌校验均兼容。
 
-### 4.4 0.2 多用户逻辑（已实现）
+### 4.4 0.3 双后端抽象（scripts/db_backend.py，已实现）
+
+```
+get_backend()          → 'sqlite' | 'mysql'（UL_BACKEND > db_config.json.backend > sqlite）
+get_conn()             → SQLite 连接（row_factory=Row）或 pymysql 连接（DictCursor）
+_mysql_sql(sql, params)→ MySQL 方言改写：
+                          INSERT ... ON CONFLICT DO UPDATE → ON DUPLICATE KEY UPDATE
+                          datetime('now','localtime')      → NOW()
+                          ? 占位符                        → %s
+                          AUTOINCREMENT 自增              → AUTO_INCREMENT
+                          INTEGER PRIMARY KEY              → BIGINT AUTO_INCREMENT（部分建表）
+保留字保护：MySQL 保留字（usage 等）自动加反引号，已反引号的不重复处理
+```
+
+业务模块统一 `import db_backend` 后只写 SQLite 方言 SQL，由 `_mysql_sql()` 在执行前转换；验证过：MySQL 下 init/注册/登录/数据隔离/增删改查/权限隔离（专属用户跨库访问被拒）全部通过。
+
+### 4.5 0.2 多用户逻辑（已实现）
 
 ```
 注册/登录（users 表 + password_hash）
@@ -299,14 +336,15 @@ Skill 录入：用户 token 调同一 API 入口，等价于网页录入【规�
 
 ## 6. 认证与安全
 
-| 项 | 现状（0.2） | 规划（0.3+） |
+| 项 | 现状（0.3） | 规划（0.4+） |
 |---|---|---|
+| 存储 | SQLite 默认 / MySQL 可选（专属低权限用户，仅本库权限） | 同左 + 连接池 |
 | 登录 | users 表 + PBKDF2 哈希，注册/登录 | 同左 + 可选过期策略 |
 | 会话 | 180 天 HttpOnly Cookie（api_tokens 持久化） | 同左 + 刷新/吊销 |
 | API | Bearer Token（api_tokens 表，每用户独立） | scope 细化 |
-| 密钥 | 环境变量/配置文件（初始 hh）；user_settings 加密存储 | 同左 |
+| 密钥 | 环境变量/配置文件（初始 hh）；MySQL root 仅建库授权用，不入库不落盘 | 同左 |
 | 静态站 | nginx 反代 + Tunnel | 同左 |
-| 私有数据 | .gitignore 全排除 | 同左 |
+| 私有数据 | .gitignore 全排除（真实配置/库/日志均放运行目录） | 同左 |
 
 ---
 
@@ -314,7 +352,8 @@ Skill 录入：用户 token 调同一 API 入口，等价于网页录入【规�
 
 | 版本 | 日期 | 内容 |
 |---|---|---|
+| 0.3.0 | 2026-10-24 | 双后端：db_backend.py 抽象 SQLite/MySQL 方言（upsert/自增/时间函数/占位符/保留字）；schema.mysql.sql；db_config.example.json；目录分离：源码迁 project/UtilityLog、运行产物迁 myapp/utilitylog、UL_APP_DIR 可配；launchd/nginx 本地部署；MySQL 端到端验证与权限隔离 |
 | 0.2.0 | 2026-10-24 | 多用户改造：users 表启用、families/bills_* 增加 user_id、历史数据迁移至 hh、auth_server 注册/登录/退出 + Bearer Token、utility.py 按用户隔离（--user）、sync_site 按用户导出、前端用户名显示与退出、文档同步 |
 | 0.1.0 | 2026-10-24 | 首次开源化：设计文档、建表语句、脱敏源码、技能模板、双语 README、安装指南、CHANGELOG |
 
-> 修订规则：每次代码变更后同步更新本文档对应章节与 `db/schema.sql`；版本号按 Keep a Changelog + 语义化版本推进。
+> 修订规则：每次代码变更后同步更新本文档对应章节与 `db/schema.sql` / `db/schema.mysql.sql`；版本号按 Keep a Changelog + 语义化版本推进。
