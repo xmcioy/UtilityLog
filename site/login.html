@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>UtilityLog 登录</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif;
+    background: #f3f4f6; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    padding: 16px;
+  }
+  .card {
+    background: #fff; border-radius: 16px; box-shadow: 0 8px 30px rgba(0,0,0,.08);
+    padding: 32px 28px; width: 100%; max-width: 360px;
+  }
+  h1 { font-size: 20px; color: #1f2937; margin-bottom: 6px; }
+  .sub { font-size: 13px; color: #9ca3af; margin-bottom: 24px; }
+  label { display: block; font-size: 13px; color: #6b7280; margin: 14px 0 6px; }
+  input {
+    width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px;
+    font-size: 14px; outline: none; transition: border-color .15s;
+  }
+  input:focus { border-color: #4f46e5; }
+  button {
+    width: 100%; margin-top: 22px; padding: 11px; border: 0; border-radius: 8px;
+    background: #4f46e5; color: #fff; font-size: 15px; cursor: pointer;
+  }
+  button:active { opacity: .85; }
+  .err { color: #dc2626; font-size: 13px; margin-top: 12px; min-height: 18px; }
+  .tip { color: #9ca3af; font-size: 12px; text-align: center; margin-top: 16px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>UtilityLog</h1>
+  <div class="sub">家庭水电气账单 · 登录后 180 天内免输入</div>
+  <form action="/login" method="post">
+    <label for="user">用户名</label>
+    <input id="user" name="user" autocomplete="username" required autofocus>
+    <label for="pass">密码</label>
+    <input id="pass" name="pass" type="password" autocomplete="current-password" required>
+    <button type="submit">登录</button>
+  </form>
+  <div class="err" id="errBox"></div>
+  <div class="tip">凭据仅存于本机 Cookie，登录状态长期有效</div>
+</div>
+<script>
+  if (new URLSearchParams(location.search).get("err")) {
+    document.getElementById("errBox").textContent = "用户名或密码错误，请重试";
+  }
+</script>
+</body>
+</html>
