@@ -1,0 +1,299 @@
+# UtilityLog 设计文档（DESIGN.md）
+
+> 版本：0.1.0（2026-10-24）
+> 目标读者：开发者 / AI 客户端（Codex、WorkBuddy 等）——任何需要理解本项目结构、意图或做后续修复改造的角色。
+> 本文档与 `db/schema.sql`、`CHANGELOG.md` 同步维护；代码实现偏离本文档时必须更新文档。
+
+---
+
+## 1. 项目概述
+
+UtilityLog 是一个**家庭水电气账单记录与展示系统**：用户把每月水费、电费、燃气费账单（截图 / PDF / 文字）交给 AI 助手，AI 解析字段后写入本地 SQLite 数据库，再同步到静态网页（nginx 托管）供随时查看，并可选同步腾讯文档在线表格。
+
+### 1.1 当前架构（0.1）
+
+```
+用户账单截图/PDF/邮箱
+        │
+        ▼
+  AI 助手 / Skill（utility-bill-recorder）
+        │  utility.py add --type <water|electric|gas>
+        ▼
+  SQLite（data/utility.db）
+  ├─ families（家庭）
+  ├─ bills_water（水费）
+  ├─ bills_electric（电费）
+  └─ bills_gas（燃气费）
+        │  sync_site.py
+        ▼
+  site/data.js ──► nginx 静态站点（site/）
+        │               │
+        ▼               ▼
+  本地 127.0.0.1:8089  公网域名（Cloudflare Tunnel）
+        │
+  认证网关 auth_server.py（/login 签发 HttpOnly Cookie，180 天）
+        ▼
+  浏览器访问需要登录
+```
+
+### 1.2 演进目标（0.2+，多用户）
+
+- 注册 / 登录，每用户独立账单
+- 每用户 API Token，供 Skill / 外部程序远程录入
+- 网页手工编辑
+- 设置页配置通用模型 API 与用户模型 Token
+- 配好模型 API 后，网页可直接上传图文记录（图片走 OCR / 多模态解析，文字走 LLM 抽取）
+- Skill 与网页双录入并存
+
+---
+
+## 2. 目录结构
+
+```
+UtilityLog/
+├── auth_server.py         认证网关（Cookie 登录校验、/login）
+├── scripts/
+│   ├── utility.py         数据管理 CLI（init/add/update/delete/list/dump）
+│   └── sync_site.py       数据库 → site/data.js 导出 + 腾讯文档同步
+├── site/
+│   ├── index.html         主展示页（趋势图/汇总/明细/用能明细）
+│   ├── login.html         登录页
+│   ├── data.js            由 sync_site.py 生成（不入库）
+│   ├── vendor/            echarts.min.js 等前端依赖
+│   └── images → ../images （软链，本地截图）
+├── data/
+│   └── utility.db         SQLite 数据库（不入库）
+├── images/                账单截图按 YYYY-MM 归档（不入库）
+├── skill/
+│   └── SKILL.md           记录技能（开源模板版，敏感信息用占位符）
+├── db/
+│   └── schema.sql         建表语句
+├── docs/
+│   ├── DESIGN.md          本文档
+│   ├── INSTALL.md         安装部署指南（传统命令 + AI 客户端）
+│   └── AI_AGENTS.md       AI 客户端（Codex/WorkBuddy）指令安装说明
+├── README.md              中英文双语说明
+├── CHANGELOG.md           修订记录
+├── LICENSE                MIT
+└── .gitignore             排除本地私有数据
+```
+
+---
+
+## 3. 数据模型（表结构）
+
+### 3.1 核心设计原则（用户强调，必须遵守）
+
+1. **按费种拆表**：水/电/气各自独立表（`bills_water` / `bills_electric` / `bills_gas`），禁止回退单宽表。原因：三类账单字段差异大（电费有峰谷八列、水费有分项费、燃气简单），拆表消除无关 NULL。
+2. **同家庭同月份同类型唯一**：`UNIQUE(family_id, bill_month)`，重复录入走 upsert 覆盖，不产生重复行。
+3. **总价 = 分项之和**：
+   - 水费：`amount = water_fee（水费金额）+ sewage_fee（污水处理费金额）`
+   - 电费：`amount = peak_usage×peak_price + valley_usage×valley_price`
+   - 燃气：`amount = usage×unit_price`
+   - 年度趋势图只画总价单柱；分项在月度明细表与用能明细堆叠柱中展示。
+4. **电费峰谷四示数独立**：`peak_prev_reading / peak_cur_reading / valley_prev_reading / valley_cur_reading` 必须分列保存，禁止合并。
+5. **阶梯档位必须记录**：`current_tier / tier_remaining / year_usage / tier_detail(JSON)`，网页与表格都要展示。
+
+### 3.2 表定义
+
+完整 DDL 见 `db/schema.sql`，此处为设计语义说明。
+
+#### families（家庭）
+
+| 列 | 说明 |
+|---|---|
+| id | 主键 |
+| name | 家庭名（唯一），如「我的家」 |
+| created_at | 创建时间 |
+
+#### bills_water（水费）
+
+| 列 | 说明 |
+|---|---|
+| family_id | 归属家庭 |
+| bill_month | 账期 YYYY-MM，与 family_id 联合唯一 |
+| usage / usage_unit | 用量（m³） |
+| prev_reading / cur_reading | 上期 / 本期读数 |
+| water_unit_price | 水费单价（元/m³） |
+| sewage_unit_price | 污水单价（元/m³） |
+| water_fee | 水费金额 = usage × water_unit_price |
+| sewage_fee | 污水费金额 = usage × 0.9 × sewage_unit_price |
+| amount | 合计 = water_fee + sewage_fee |
+| bill_date / image / note | 账单日期 / 截图 / 备注 |
+| current_tier / tier_remaining / year_usage / tier_detail | 档位信息 |
+
+#### bills_electric（电费）
+
+| 列 | 说明 |
+|---|---|
+| family_id / bill_month | 归属 + 账期（唯一） |
+| usage / usage_unit | 总用量（kWh） |
+| prev_reading / cur_reading | 综合上期 / 本期读数 |
+| peak_prev_reading / peak_cur_reading | 峰上期 / 峰本期示数 |
+| valley_prev_reading / valley_cur_reading | 谷上期 / 谷本期示数 |
+| peak_usage / peak_price | 峰电量 / 峰单价 |
+| valley_usage / valley_price | 谷电量 / 谷单价 |
+| unit_price | 综合 / 平均单价 |
+| amount | 费用合计 = 峰电费 + 谷电费 |
+| 其余 | 同 bills_water |
+
+#### bills_gas（燃气费）
+
+| 列 | 说明 |
+|---|---|
+| family_id / bill_month | 归属 + 账期（唯一） |
+| usage / usage_unit | 用量（m³） |
+| prev_reading / cur_reading | 上期 / 本期读数 |
+| unit_price | 单价（元/m³） |
+| amount | 费用 = usage × unit_price |
+| 其余 | 同 bills_water |
+
+#### 0.2 规划表（已预置，暂不启用）
+
+- `users`：多用户账号（username / password_hash / display_name / is_active）
+- `api_tokens`：用户 API Token（token / scope / expires_at / last_used）
+- `user_settings`：模型 API 配置（model_api_base / model_api_key / model_name）
+- 迁移：`ALTER TABLE families/bills_* ADD COLUMN user_id`
+
+---
+
+## 4. 程序逻辑设计
+
+### 4.1 scripts/utility.py（数据管理 CLI）
+
+职责：**唯一的数据写入/读取入口**。网页与 Skill 都不直接碰数据库。
+
+```
+命令一览：
+  init                     建库建表
+  add-family <name>        新增家庭
+  add --family --month --type --usage --amount [--prev-reading --cur-reading
+      --unit-price --water-unit-price --sewage-unit-price --peak-usage --peak-price
+      --valley-usage --valley-price --water-fee --sewage-fee --bill-date --image --note ...]
+  update <id> [--字段...]  修改（type 不可改，按表路由）
+  delete <id>              删除（自动定位所在表）
+  list [--family --month --type]   查询（JSON 输出）
+  dump                    全量导出（三表 UNION 统一投影）
+```
+
+关键实现：
+
+1. **按 type 路由**：`TABLE_BY_TYPE = {water: bills_water, electric: bills_electric, gas: bills_gas}`；`add` 用 `INSERT ... ON CONFLICT(family_id, bill_month) DO UPDATE` 实现 upsert。
+2. **update/delete 自动定位表**：`find_bill_table(bid)` 依次在三张表按 id 查找，确定所属表后操作；`type` 字段不可修改（账单按表路由）。
+3. **三表 UNION 统一投影**：`UNION_COLS` 把三张表投影为同一列集（非本表字段为 NULL），前端 / sync_site 无需感知拆表细节；兼容旧字段别名 `sewage_price`。
+4. **档位 JSON**：`tier_detail` 存 JSON 字符串，写入时 `json.dumps`，读取时原样输出。
+5. **路径解析（0.1 开源化）**：项目根由 `Path(__file__).resolve().parent.parent` 推导，数据库默认 `data/utility.db`，可用环境变量 `UL_ROOT` 覆盖（详见 INSTALL.md）。
+6. **缺项不编造**：CLI 只写用户/解析出的字段，缺失留 NULL；上游解析层（Skill）负责提示缺失。
+
+### 4.2 scripts/sync_site.py（站点同步 + 腾讯文档）
+
+职责：把数据库当前状态导出为 `site/data.js`（`window.UTILITY_DATA = {...}`），并为 `index.html` 中的 data.js 引用追加版本号（`?v=v<timestamp>`）规避浏览器缓存；随后可选覆盖式同步腾讯文档表格。
+
+```
+流程：
+  dump_json() 读取 families + bills（三表 UNION）
+  → 写 site/data.js
+  → 更新 index.html 中 <script src="data.js?v=..."> 的版本戳
+  → 若配置了腾讯文档凭据（0.2 起可禁用），按键（家庭+月份+类型）覆盖式写入
+```
+
+腾讯文档同步要点：
+- 覆盖式更新：`get_cell_data` 读全表定位键行，`set_range_value` 覆盖该行全部 27 列；未找到则写首个空行。
+- 大表分批：每批 ≤9 行或 ≤180 cells。
+- 表头 27 列：家庭/月份/类型/上次读数/本次读数/用量/单位/综合单价/峰上期/峰本期/谷上期/谷本期/峰电量/峰单价/谷电量/谷单价/污水单价/当前档位/本档剩余/年累计/档位明细/费用/账单日期/截图/备注/水费金额/污水费金额。
+
+### 4.3 auth_server.py（认证网关）
+
+职责：对 `site/` 静态资源做登录鉴权。
+
+```
+监听 127.0.0.1:8099（nginx 反代，公网经 Cloudflare Tunnel）
+/login：POST user/pass → 校验通过签发 180 天 HttpOnly Cookie（ul_token）
+/token 文件：.auth_tokens.json 存有效 token（不入库）
+静态文件：未登录 → 返回 login.html 或 401；已登录 → 正常服务
+```
+
+0.1 开源化要点：
+- **凭据不再硬编码**：改为环境变量 `UL_USER` / `UL_PASS` 或配置文件 `auth_config.json`（模板见 `auth_config.example.json`，真实配置不入库）。
+- 本地原部署继续可用：launchd plist 注入环境变量，或生成 `auth_config.json`（已被 .gitignore 排除）。
+
+### 4.4 0.2 多用户逻辑规划
+
+```
+注册/登录（users 表 + password_hash）
+  → 登录签发会话 Cookie；同时支持 API Token 认证（Authorization: Bearer <token>）
+每用户隔离：bills_*/families 增加 user_id，所有查询强制带 user_id
+设置页：用户配置通用模型 API base + key + model（存 user_settings，key 加密）
+网页上传录入：配好模型 API 后，POST 图片 → 服务端调模型 OCR/多模态解析
+  → 结构化字段 → utility.py add；纯文字走 LLM 抽取
+Skill 录入：用户 token 调同一 API 入口，等价于网页录入
+```
+
+---
+
+## 5. 展示设计
+
+### 5.1 页面结构（site/index.html）
+
+```
+┌────────────────────────────────────────────┐
+│ 标题：家庭水电气账单        [登录状态/退出] │
+├────────────────────────────────────────────┤
+│ 年度趋势（总价单柱折线图，水/电/气三柱）     │
+├────────────────────────────────────────────┤
+│ 用能明细（Tabs：水/电/气 + 年份）           │
+│   ├ 月度费用堆叠柱（分项分色 + 用量折线）   │
+│   └ 阶梯收费进度条（绿/黄/粉三段 + 档位卡） │
+├────────────────────────────────────────────┤
+│ 当年汇总（分费种合计）                      │
+├────────────────────────────────────────────┤
+│ 月度明细（三张独立表，按费种分列）          │
+│   ├ 水费表：用量/水费金额/污水费金额/合计   │
+│   ├ 电费表：峰谷四示数/峰谷电量/峰谷单价    │
+│   └ 燃气表：读数/用量/单价/费用             │
+└────────────────────────────────────────────┘
+```
+
+### 5.2 关键展示规则（用户强调）
+
+1. **月度明细分项独立展示**：水/电/气三张独立表，禁止跨类型混排。水费表含「水费金额 + 污水费金额」两列；电费表峰谷四列独立展示。
+2. **年度趋势单柱总价**：水费柱 = amount（水费金额+污水费金额），电费柱 = amount（峰+谷），燃气柱 = amount；tooltip 只显示总价。
+3. **用能明细区块**：
+   - 顶部 Tabs（水/电/气）+ 年份选择；
+   - 月度费用按分项堆叠（水=水费段+污水费段；电=峰段+谷段；气=单段），柱顶标总价，叠加用量折线（第二 Y 轴）；
+   - 底部阶梯进度条：绿/黄/粉三档（第三档取 25% 宽度示意），分界刻度显示阈值（水 220/300、电 3120/4800、气 310/520），指针定位当年累计用量，信息卡显示当前档位、年累计、本档上限、本档剩余、各档单价。
+4. **档位展示**：每类账单的当前档位与本档剩余都要在网页展示。
+5. **数据来源**：`window.UTILITY_DATA`（data.js）；`images/${b.image}` 相对路径加载截图。
+
+### 5.3 登录页（site/login.html）
+
+极简卡片式；POST /login；错误提示通过 `?err` 参数；凭据仅存本机 Cookie，180 天免登录。
+
+### 5.4 0.2 展示规划
+
+- 设置页：模型 API base/key/model、用户 Token 展示与吊销、主题切换
+- 网页录入入口：上传图片/文字表单，解析结果预览后提交
+- 多用户：登录后只显示本人账单；注册页
+
+---
+
+## 6. 认证与安全
+
+| 项 | 现状（0.1） | 规划（0.2） |
+|---|---|---|
+| 登录 | user/pass → Cookie | 注册/登录，password_hash |
+| 会话 | 180 天 HttpOnly Cookie | 同左 + 可选过期策略 |
+| API | 无 | Bearer Token（api_tokens） |
+| 密钥 | 环境变量/配置文件 | user_settings 加密存储 |
+| 静态站 | nginx 反代 + Tunnel | 同左 |
+| 私有数据 | .gitignore 全排除 | 同左 |
+
+---
+
+## 7. 修订记录
+
+| 版本 | 日期 | 内容 |
+|---|---|---|
+| 0.1.0 | 2026-10-24 | 首次开源化：设计文档、建表语句、脱敏源码、技能模板、双语 README、安装指南、CHANGELOG |
+
+> 修订规则：每次代码变更后同步更新本文档对应章节与 `db/schema.sql`；版本号按 Keep a Changelog + 语义化版本推进。
