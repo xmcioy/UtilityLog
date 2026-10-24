@@ -1,0 +1,26 @@
+# --- 本地私有数据（严禁入库） ---
+data/
+images/
+entries/
+temp/
+temp_elec/
+temp_gas/
+site/images
+site/data.js
+# 根目录本地技能副本（含私有配置），开源版在 skill/SKILL.md
+/SKILL.md
+
+# --- 凭据与运行状态 ---
+.auth_tokens.json
+auth_config.json
+.htpasswd
+*.log
+*.bak
+
+# --- Python / macOS ---
+__pycache__/
+*.pyc
+.DS_Store
+
+# 根目录误生成的空库副本
+utility.db
