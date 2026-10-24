@@ -6,12 +6,30 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-### 规划（0.2）
-- 多用户注册/登录，账单按用户隔离
-- 每用户 API Token，供 Skill 远程录入
+### 规划（0.3）
 - 设置页：通用模型 API 配置 + 用户模型 Token
 - 网页端图片/文字直接上传录入（配模型 API 自动解析）
 - 手工编辑/删除账单入口
+
+## [0.2.0] - 2026-10-24
+
+### 新增
+- 多用户体系：`users` / `api_tokens` / `user_settings` 表启用（0.1 已预置 DDL）
+- `auth_server.py` 多用户认证：注册（POST /register）、登录、退出；会话 Cookie 绑定用户，兼容 Bearer Token / Basic 认证
+- `utility.py` 用户隔离：`--user` 参数贯穿 add/update/delete/list/dump/add-family；新增 `register` / `list-users` 命令
+- `site/login.html` 注册表单（用户名 / 密码 / 显示名称，注册成功自动登录）
+- `site/index.html` 头部用户栏：显示当前登录用户名 + 退出按钮
+- `sync_site.py` 按配置用户导出数据；`auth_server.py` 动态输出当前用户 `/data.js`
+- `db/migrations/migrate_multiuser.py`：0.1 → 0.2 升级迁移（自动备份 + 建表 + 数据归属）
+
+### 变更
+- `families` / `bills_water` / `bills_electric` / `bills_gas` 增加 `user_id` 列，所有查询强制按用户过滤
+- 现有历史数据（1 家庭、水 8 / 电 18 / 气 9 条）迁移归属至 `hh` 用户（凭据沿用 `auth_config.json` / 环境变量，仓库不含真实密码）
+- `db/schema.sql` 版本升级 0.2.0；`docs/DESIGN.md` 同步更新架构与逻辑说明
+
+### 说明
+- 会话 Token 由内存文件 `.auth_tokens.json` 迁移至数据库 `api_tokens` 表持久化（不入库）
+- 首页数据不再依赖手工 `sync_site.py`：登录后由认证网关按当前用户实时导出 `data.js`
 
 ## [0.1.0] - 2026-10-24
 

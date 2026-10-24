@@ -93,6 +93,13 @@ background:#fff;color:var(--txt);font-size:13px;cursor:pointer;}
 .tier-k{color:var(--sub);}
 .tier-card b{color:#e11d48;}
 .foot{text-align:center;color:#9ca3af;font-size:11px;margin-top:20px;}
+.userbar{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:10px;}
+.userbar .who{font-size:13px;opacity:.95;}
+.userbar .who b{font-weight:700;}
+.userbar form{margin:0;}
+.logout-btn{background:rgba(255,255,255,.18);color:#fff;border:1px solid rgba(255,255,255,.35);
+border-radius:14px;padding:6px 14px;font-size:12px;cursor:pointer;transition:.2s;}
+.logout-btn:hover{background:rgba(255,255,255,.32);}
 </style>
 </head>
 <body>
@@ -100,6 +107,10 @@ background:#fff;color:var(--txt);font-size:13px;cursor:pointer;}
 <div class="header">
   <h1>家庭水电气账单</h1>
   <div class="sub">每月用水 / 用电 / 燃气用量与费用记录</div>
+  <div class="userbar">
+    <span class="who" id="userBar">欢迎，<b id="curUser">-</b></span>
+    <form action="/logout" method="post"><button class="logout-btn" type="submit">退出登录</button></form>
+  </div>
   <div class="family-tabs" id="familyTabs"></div>
 </div>
 
@@ -197,6 +208,9 @@ background:#fff;color:var(--txt);font-size:13px;cursor:pointer;}
 <script src="vendor/echarts.min.js"></script>
 <script>
 const DATA = window.UTILITY_DATA || {families:[], bills:[]};
+if (DATA.user && DATA.user.username){
+  document.getElementById("curUser").textContent = DATA.user.display_name || DATA.user.username;
+}
 const TYPE_META = {
   water:{name:"水费",color:"#3b82f6",unit:"m³"},
   electric:{name:"电费",color:"#f59e0b",unit:"kWh"},

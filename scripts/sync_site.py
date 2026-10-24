@@ -19,11 +19,15 @@ DATA_JS = os.path.join(SITE, "data.js")
 INDEX_HTML = os.path.join(SITE, "index.html")
 
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
-from utility import dump_json  # noqa: E402
+from utility import dump_json, DEFAULT_USER  # noqa: E402
 
 
 def main():
-    data = dump_json()
+    # 0.2 多用户：导出配置凭据用户（auth_config.json / UL_USER）的数据
+    user = os.environ.get("UL_SYNC_USER", DEFAULT_USER)
+    if not user:
+        raise SystemExit("ERROR: no sync user configured (set UL_USER or auth_config.json or UL_SYNC_USER)")
+    data = dump_json(user)
     js = "window.UTILITY_DATA = " + json.dumps(data, ensure_ascii=False, separators=(",", ":")) + ";"
     with open(DATA_JS, "w", encoding="utf-8") as f:
         f.write(js)
@@ -38,7 +42,7 @@ def main():
         with open(INDEX_HTML, "w", encoding="utf-8") as f:
             f.write(html)
 
-    print(f"site synced: {DATA_JS} ({len(data['bills'])} bills, {len(data['families'])} families, {version})")
+    print(f"site synced: {DATA_JS} (user={user}, {len(data['bills'])} bills, {len(data['families'])} families, {version})")
 
 
 if __name__ == "__main__":

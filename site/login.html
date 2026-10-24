@@ -30,25 +30,61 @@
   button:active { opacity: .85; }
   .err { color: #dc2626; font-size: 13px; margin-top: 12px; min-height: 18px; }
   .tip { color: #9ca3af; font-size: 12px; text-align: center; margin-top: 16px; }
+  .switch-btn { background: none; border: none; color: #4f46e5; font-size: 13px;
+    cursor: pointer; margin-top: 14px; display: block; width: 100%; text-align: center; }
+  .switch-btn:hover { text-decoration: underline; }
+  .reg-note { font-size: 12px; color: #9ca3af; margin-top: 14px; text-align: center; }
 </style>
 </head>
 <body>
 <div class="card">
   <h1>UtilityLog</h1>
-  <div class="sub">家庭水电气账单 · 登录后 180 天内免输入</div>
-  <form action="/login" method="post">
+  <div class="sub">家庭水电气账单 · 多用户版</div>
+
+  <form id="loginForm" action="/login" method="post">
     <label for="user">用户名</label>
     <input id="user" name="user" autocomplete="username" required autofocus>
     <label for="pass">密码</label>
     <input id="pass" name="pass" type="password" autocomplete="current-password" required>
     <button type="submit">登录</button>
+    <div class="err" id="errBox"></div>
+    <button type="button" class="switch-btn" onclick="showReg()">没有账号？注册新账号</button>
   </form>
-  <div class="err" id="errBox"></div>
-  <div class="tip">凭据仅存于本机 Cookie，登录状态长期有效</div>
+
+  <form id="regForm" action="/register" method="post" style="display:none">
+    <label for="regUser">用户名</label>
+    <input id="regUser" name="user" autocomplete="username" required>
+    <label for="regPass">密码 <span style="color:#9ca3af;font-weight:400">（至少 4 位）</span></label>
+    <input id="regPass" name="pass" type="password" autocomplete="new-password" required>
+    <label for="regName">显示名称（可选）</label>
+    <input id="regName" name="display_name" autocomplete="nickname">
+    <button type="submit">注册并登录</button>
+    <div class="err" id="regErrBox"></div>
+    <div class="reg-note">注册成功后自动登录，数据完全隔离</div>
+    <button type="button" class="switch-btn" onclick="showLogin()">已有账号？返回登录</button>
+  </form>
 </div>
 <script>
-  if (new URLSearchParams(location.search).get("err")) {
-    document.getElementById("errBox").textContent = "用户名或密码错误，请重试";
+  const params = new URLSearchParams(location.search);
+  if (params.get("err")) {
+    const code = params.get("err");
+    if (code === "1") {
+      document.getElementById("errBox").textContent = "用户名或密码错误，请重试";
+    } else if (code === "2") {
+      showReg();
+      document.getElementById("regErrBox").textContent =
+        "注册失败：" + (params.get("msg") || "用户名已存在，请换一个");
+    }
+  }
+  function showReg(){
+    document.getElementById("loginForm").style.display = "none";
+    document.getElementById("regForm").style.display = "block";
+    document.getElementById("regUser").focus();
+  }
+  function showLogin(){
+    document.getElementById("regForm").style.display = "none";
+    document.getElementById("loginForm").style.display = "block";
+    document.getElementById("user").focus();
   }
 </script>
 </body>

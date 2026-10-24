@@ -1,6 +1,6 @@
 # UtilityLog 设计文档（DESIGN.md）
 
-> 版本：0.1.0（2026-10-24）
+> 版本：0.2.0（2026-10-24）
 > 目标读者：开发者 / AI 客户端（Codex、WorkBuddy 等）——任何需要理解本项目结构、意图或做后续修复改造的角色。
 > 本文档与 `db/schema.sql`、`CHANGELOG.md` 同步维护；代码实现偏离本文档时必须更新文档。
 
@@ -10,40 +10,41 @@
 
 UtilityLog 是一个**家庭水电气账单记录与展示系统**：用户把每月水费、电费、燃气费账单（截图 / PDF / 文字）交给 AI 助手，AI 解析字段后写入本地 SQLite 数据库，再同步到静态网页（nginx 托管）供随时查看，并可选同步腾讯文档在线表格。
 
-### 1.1 当前架构（0.1）
+### 1.1 当前架构（0.2 多用户）
 
 ```
-用户账单截图/PDF/邮箱
-        │
+用户注册/登录（users 表，password_hash 存库）
+        │  Cookie / Bearer Token / Basic 鉴权
         ▼
   AI 助手 / Skill（utility-bill-recorder）
-        │  utility.py add --type <water|electric|gas>
+        │  utility.py add --user <user> --type <water|electric|gas>
         ▼
   SQLite（data/utility.db）
-  ├─ families（家庭）
-  ├─ bills_water（水费）
-  ├─ bills_electric（电费）
-  └─ bills_gas（燃气费）
-        │  sync_site.py
+  ├─ users（账号，PBKDF2 哈希）
+  ├─ families（家庭，user_id 归属）
+  ├─ bills_water（水费，user_id 归属）
+  ├─ bills_electric（电费，user_id 归属）
+  └─ bills_gas（燃气费，user_id 归属）
+        │  sync_site.py（导出配置用户数据）
         ▼
   site/data.js ──► nginx 静态站点（site/）
         │               │
         ▼               ▼
   本地 127.0.0.1:8089  公网域名（Cloudflare Tunnel）
         │
-  认证网关 auth_server.py（/login 签发 HttpOnly Cookie，180 天）
+  认证网关 auth_server.py（/register、/login、/logout；动态 /data.js）
         ▼
-  浏览器访问需要登录
+  浏览器访问：每用户只看到本人数据
 ```
 
 ### 1.2 演进目标（0.2+，多用户）
 
-- 注册 / 登录，每用户独立账单
-- 每用户 API Token，供 Skill / 外部程序远程录入
-- 网页手工编辑
-- 设置页配置通用模型 API 与用户模型 Token
-- 配好模型 API 后，网页可直接上传图文记录（图片走 OCR / 多模态解析，文字走 LLM 抽取）
-- Skill 与网页双录入并存
+- [x] 注册 / 登录，每用户独立账单
+- [x] 每用户 API Token（api_tokens 表），供 Skill / 外部程序远程录入
+- [ ] 网页手工编辑
+- [ ] 设置页配置通用模型 API 与用户模型 Token
+- [ ] 配好模型 API 后，网页可直接上传图文记录（图片走 OCR / 多模态解析，文字走 LLM 抽取）
+- [ ] Skill 与网页双录入并存
 
 ---
 
@@ -67,7 +68,9 @@ UtilityLog/
 ├── skill/
 │   └── SKILL.md           记录技能（开源模板版，敏感信息用占位符）
 ├── db/
-│   └── schema.sql         建表语句
+│   ├── schema.sql         建表语句（0.2：users + user_id 隔离）
+│   └── migrations/
+│       └── migrate_multiuser.py   0.1 → 0.2 迁移（备份 + 建表 + 数据归属 hh）
 ├── docs/
 │   ├── DESIGN.md          本文档
 │   ├── INSTALL.md         安装部署指南（传统命令 + AI 客户端）
@@ -103,7 +106,8 @@ UtilityLog/
 | 列 | 说明 |
 |---|---|
 | id | 主键 |
-| name | 家庭名（唯一），如「我的家」 |
+| name | 家庭名（用户内唯一），如「我的家」 |
+| user_id | 归属用户（0.2 起） |
 | created_at | 创建时间 |
 
 #### bills_water（水费）
@@ -111,6 +115,7 @@ UtilityLog/
 | 列 | 说明 |
 |---|---|
 | family_id | 归属家庭 |
+| user_id | 归属用户（0.2 起） |
 | bill_month | 账期 YYYY-MM，与 family_id 联合唯一 |
 | usage / usage_unit | 用量（m³） |
 | prev_reading / cur_reading | 上期 / 本期读数 |
@@ -127,6 +132,7 @@ UtilityLog/
 | 列 | 说明 |
 |---|---|
 | family_id / bill_month | 归属 + 账期（唯一） |
+| user_id | 归属用户（0.2 起） |
 | usage / usage_unit | 总用量（kWh） |
 | prev_reading / cur_reading | 综合上期 / 本期读数 |
 | peak_prev_reading / peak_cur_reading | 峰上期 / 峰本期示数 |
@@ -142,18 +148,19 @@ UtilityLog/
 | 列 | 说明 |
 |---|---|
 | family_id / bill_month | 归属 + 账期（唯一） |
+| user_id | 归属用户（0.2 起） |
 | usage / usage_unit | 用量（m³） |
 | prev_reading / cur_reading | 上期 / 本期读数 |
 | unit_price | 单价（元/m³） |
 | amount | 费用 = usage × unit_price |
 | 其余 | 同 bills_water |
 
-#### 0.2 规划表（已预置，暂不启用）
+#### 多用户表（0.2 起启用）
 
-- `users`：多用户账号（username / password_hash / display_name / is_active）
-- `api_tokens`：用户 API Token（token / scope / expires_at / last_used）
+- `users`：多用户账号（username / password_hash(PBKDF2) / display_name / is_active）
+- `api_tokens`：会话 Cookie 与 API Token（token / user_id / scope / expires_at / last_used）
 - `user_settings`：模型 API 配置（model_api_base / model_api_key / model_name）
-- 迁移：`ALTER TABLE families/bills_* ADD COLUMN user_id`
+- 隔离：`families` 与 `bills_*` 均带 `user_id`，所有查询强制按用户过滤
 
 ---
 
@@ -165,15 +172,17 @@ UtilityLog/
 
 ```
 命令一览：
-  init                     建库建表
-  add-family <name>        新增家庭
-  add --family --month --type --usage --amount [--prev-reading --cur-reading
+  init                     建库建表（含 users 等）
+  register <username> <pass> [display_name]   注册用户（PBKDF2 哈希）
+  list-users                列出用户
+  add-family <name>        新增家庭（归属 --user）
+  add --user <user> --family --month --type --usage --amount [--prev-reading --cur-reading
       --unit-price --water-unit-price --sewage-unit-price --peak-usage --peak-price
       --valley-usage --valley-price --water-fee --sewage-fee --bill-date --image --note ...]
-  update <id> [--字段...]  修改（type 不可改，按表路由）
-  delete <id>              删除（自动定位所在表）
-  list [--family --month --type]   查询（JSON 输出）
-  dump                    全量导出（三表 UNION 统一投影）
+  update --user <user> <id> [--字段...]  修改（type 不可改，按表路由）
+  delete --user <user> <id>              删除（自动定位所在表）
+  list [--user --family --month --type]   查询（JSON 输出）
+  dump [--user]                按用户全量导出（三表 UNION 统一投影 + user 信息）
 ```
 
 关键实现：
@@ -182,20 +191,23 @@ UtilityLog/
 2. **update/delete 自动定位表**：`find_bill_table(bid)` 依次在三张表按 id 查找，确定所属表后操作；`type` 字段不可修改（账单按表路由）。
 3. **三表 UNION 统一投影**：`UNION_COLS` 把三张表投影为同一列集（非本表字段为 NULL），前端 / sync_site 无需感知拆表细节；兼容旧字段别名 `sewage_price`。
 4. **档位 JSON**：`tier_detail` 存 JSON 字符串，写入时 `json.dumps`，读取时原样输出。
-5. **路径解析（0.1 开源化）**：项目根由 `Path(__file__).resolve().parent.parent` 推导，数据库默认 `data/utility.db`，可用环境变量 `UL_ROOT` 覆盖（详见 INSTALL.md）。
-6. **缺项不编造**：CLI 只写用户/解析出的字段，缺失留 NULL；上游解析层（Skill）负责提示缺失。
+5. **用户隔离（0.2）**：所有查询/写入强制带 `user_id`（由 `--user` 解析）；家庭名只在同一用户内唯一；`list/update/delete` 找不到他人数据时如实报错；`DEFAULT_USER` 读取 `UL_USER` 或 `auth_config.json`，未配置则必须显式传 `--user`。
+6. **路径解析（0.1 开源化）**：项目根由 `Path(__file__).resolve().parent.parent` 推导，数据库默认 `data/utility.db`，可用环境变量 `UL_ROOT` 覆盖（详见 INSTALL.md）。
+7. **缺项不编造**：CLI 只写用户/解析出的字段，缺失留 NULL；上游解析层（Skill）负责提示缺失。
 
 ### 4.2 scripts/sync_site.py（站点同步 + 腾讯文档）
 
 职责：把数据库当前状态导出为 `site/data.js`（`window.UTILITY_DATA = {...}`），并为 `index.html` 中的 data.js 引用追加版本号（`?v=v<timestamp>`）规避浏览器缓存；随后可选覆盖式同步腾讯文档表格。
 
 ```
-流程：
-  dump_json() 读取 families + bills（三表 UNION）
-  → 写 site/data.js
+流程（0.2：导出指定用户数据）：
+  dump_json(user) 读取该用户 families + bills（三表 UNION）
+  → 写 site/data.js（window.UTILITY_DATA = {user, families, bills}）
   → 更新 index.html 中 <script src="data.js?v=..."> 的版本戳
   → 若配置了腾讯文档凭据（0.2 起可禁用），按键（家庭+月份+类型）覆盖式写入
 ```
+
+用户来源（优先级从高到低）：环境变量 `UL_SYNC_USER` > `DEFAULT_USER`（`UL_USER` 或 `auth_config.json`）。
 
 腾讯文档同步要点：
 - 覆盖式更新：`get_cell_data` 读全表定位键行，`set_range_value` 覆盖该行全部 27 列；未找到则写首个空行。
@@ -204,29 +216,37 @@ UtilityLog/
 
 ### 4.3 auth_server.py（认证网关）
 
-职责：对 `site/` 静态资源做登录鉴权。
+职责：对 `site/` 静态资源做多用户鉴权，并为前端动态导出当前登录用户数据。
 
 ```
 监听 127.0.0.1:8099（nginx 反代，公网经 Cloudflare Tunnel）
-/login：POST user/pass → 校验通过签发 180 天 HttpOnly Cookie（ul_token）
-/token 文件：.auth_tokens.json 存有效 token（不入库）
+/register：POST user/pass[/display_name] → 创建用户（PBKDF2 哈希入库）并自动登录
+/login：POST user/pass → 校验 users 表，通过签发 180 天 HttpOnly Cookie（ul_token）
+/logout：清除 Cookie 并吊销对应 token
+API 鉴权（三选一，按序）：
+  1. Cookie（ul_token → api_tokens 表关联 user_id）
+  2. Authorization: Bearer <token>（api_tokens 表）
+  3. Authorization: Basic base64(user:pass)（兼容旧脚本）
+/data.js：动态按当前用户导出（不再依赖手工 sync）
 静态文件：未登录 → 返回 login.html 或 401；已登录 → 正常服务
 ```
 
 0.1 开源化要点：
 - **凭据不再硬编码**：改为环境变量 `UL_USER` / `UL_PASS` 或配置文件 `auth_config.json`（模板见 `auth_config.example.json`，真实配置不入库）。
-- 本地原部署继续可用：launchd plist 注入环境变量，或生成 `auth_config.json`（已被 .gitignore 排除）。
+- 0.2 起凭据仅用于**创建/校验初始账号 hh**；用户注册/登录走 `users` 表。
 
-### 4.4 0.2 多用户逻辑规划
+### 4.4 0.2 多用户逻辑（已实现）
 
 ```
 注册/登录（users 表 + password_hash）
-  → 登录签发会话 Cookie；同时支持 API Token 认证（Authorization: Bearer <token>）
-每用户隔离：bills_*/families 增加 user_id，所有查询强制带 user_id
-设置页：用户配置通用模型 API base + key + model（存 user_settings，key 加密）
+  → 登录签发会话 Cookie（api_tokens 持久化，绑定 user_id）
+  → 同时支持 Bearer Token / Basic 认证
+每用户隔离：bills_*/families 带 user_id，所有查询强制带 user_id
+数据导出：auth_server 动态 /data.js + sync_site.py 按用户导出
+设置页：用户配置通用模型 API base + key + model（存 user_settings，key 加密）【规划】
 网页上传录入：配好模型 API 后，POST 图片 → 服务端调模型 OCR/多模态解析
-  → 结构化字段 → utility.py add；纯文字走 LLM 抽取
-Skill 录入：用户 token 调同一 API 入口，等价于网页录入
+  → 结构化字段 → utility.py add；纯文字走 LLM 抽取【规划】
+Skill 录入：用户 token 调同一 API 入口，等价于网页录入【规划】
 ```
 
 ---
@@ -237,7 +257,7 @@ Skill 录入：用户 token 调同一 API 入口，等价于网页录入
 
 ```
 ┌────────────────────────────────────────────┐
-│ 标题：家庭水电气账单        [登录状态/退出] │
+│ 标题：家庭水电气账单    [欢迎，用户名] [退出]│
 ├────────────────────────────────────────────┤
 │ 年度趋势（总价单柱折线图，水/电/气三柱）     │
 ├────────────────────────────────────────────┤
@@ -268,23 +288,23 @@ Skill 录入：用户 token 调同一 API 入口，等价于网页录入
 ### 5.3 登录页（site/login.html）
 
 极简卡片式；POST /login；错误提示通过 `?err` 参数；凭据仅存本机 Cookie，180 天免登录。
+0.2 起：同页提供**注册表单**（用户名 / 密码 / 显示名称），POST /register 成功后自动登录；注册失败通过 `?err=2&msg=...` 回显。
 
-### 5.4 0.2 展示规划
+### 5.4 0.2 展示（已实现）
 
-- 设置页：模型 API base/key/model、用户 Token 展示与吊销、主题切换
-- 网页录入入口：上传图片/文字表单，解析结果预览后提交
-- 多用户：登录后只显示本人账单；注册页
+- 头部用户栏：显示当前登录用户名（`DATA.user.display_name || username`）与退出按钮（POST /logout）
+- 数据完全按登录用户隔离：`data.js` 由 auth_server 按当前用户动态导出
 
 ---
 
 ## 6. 认证与安全
 
-| 项 | 现状（0.1） | 规划（0.2） |
+| 项 | 现状（0.2） | 规划（0.3+） |
 |---|---|---|
-| 登录 | user/pass → Cookie | 注册/登录，password_hash |
-| 会话 | 180 天 HttpOnly Cookie | 同左 + 可选过期策略 |
-| API | 无 | Bearer Token（api_tokens） |
-| 密钥 | 环境变量/配置文件 | user_settings 加密存储 |
+| 登录 | users 表 + PBKDF2 哈希，注册/登录 | 同左 + 可选过期策略 |
+| 会话 | 180 天 HttpOnly Cookie（api_tokens 持久化） | 同左 + 刷新/吊销 |
+| API | Bearer Token（api_tokens 表，每用户独立） | scope 细化 |
+| 密钥 | 环境变量/配置文件（初始 hh）；user_settings 加密存储 | 同左 |
 | 静态站 | nginx 反代 + Tunnel | 同左 |
 | 私有数据 | .gitignore 全排除 | 同左 |
 
@@ -294,6 +314,7 @@ Skill 录入：用户 token 调同一 API 入口，等价于网页录入
 
 | 版本 | 日期 | 内容 |
 |---|---|---|
+| 0.2.0 | 2026-10-24 | 多用户改造：users 表启用、families/bills_* 增加 user_id、历史数据迁移至 hh、auth_server 注册/登录/退出 + Bearer Token、utility.py 按用户隔离（--user）、sync_site 按用户导出、前端用户名显示与退出、文档同步 |
 | 0.1.0 | 2026-10-24 | 首次开源化：设计文档、建表语句、脱敏源码、技能模板、双语 README、安装指南、CHANGELOG |
 
 > 修订规则：每次代码变更后同步更新本文档对应章节与 `db/schema.sql`；版本号按 Keep a Changelog + 语义化版本推进。

@@ -1,23 +1,25 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""UtilityLog 站点认证网关（Cookie 长期登录 + Basic Auth 兼容）
+"""UtilityLog 站点认证网关（0.2 多用户版：Cookie 会话 + Bearer Token + Basic 兼容）
 监听 127.0.0.1:8099，nginx 反代全部请求到此：
-  - POST /login    校验用户名密码，种 180 天 HttpOnly Cookie，302 到 /
-  - POST /logout   清除 Cookie 与 token
-  - 其它 GET       校验 Cookie 或 Basic 头，通过则返回 site/ 静态文件，
-                   否则页面请求回 login.html、脚本请求回 401
+  - POST /register  注册新用户（users 表存 PBKDF2 哈希），成功即登录
+  - POST /login      校验 users 表用户名密码，种 180 天 HttpOnly Cookie，302 到 /
+  - POST /logout     清除 Cookie 与 token
+  - GET  /data.js    按当前会话用户动态导出数据（window.UTILITY_DATA = {...}）
+  - 其它 GET         校验 Cookie / Bearer / Basic，通过则返回 site/ 静态文件，
+                     否则页面请求回 login.html、脚本请求回 401
 
-凭据配置（三选一，优先级从高到低）：
-  1. 环境变量 UL_USER / UL_PASS
-  2. 项目根目录 auth_config.json（{"user": "...", "pass": "..."}）
-  3. 未配置时拒绝所有登录（提示管理员配置）
-
-token 持久化于 <项目根>/.auth_tokens.json
+凭据说明：
+  - 登录/注册均基于 SQLite users 表（password_hash，PBKDF2-SHA256）
+  - 仓库内不含任何真实密码；本地 auth_config.json 仅用于 0.2 迁移脚本创建初始用户
+会话/API token 持久化于 SQLite api_tokens 表（绑定 user_id）
 """
 import base64
+import hashlib
 import json
 import os
 import secrets
+import sys
 import threading
 import time
 import urllib.parse
@@ -26,106 +28,188 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(os.environ.get("UL_ROOT", Path(__file__).resolve().parent))
 ROOT = PROJECT_ROOT / "site"
-TOKEN_FILE = PROJECT_ROOT / ".auth_tokens.json"
-CONFIG_FILE = PROJECT_ROOT / "auth_config.json"
+DB_PATH = os.environ.get("UL_DB", str(PROJECT_ROOT / "data" / "utility.db"))
+SCRIPTS = str(PROJECT_ROOT / "scripts")
+sys.path.insert(0, SCRIPTS)
+from utility import dump_json, user_id_by_name  # noqa: E402
 
 COOKIE_NAME = "ul_token"
 COOKIE_MAX_AGE = 15552000  # 180 天
-TOKEN_LIFE = 180 * 24 * 3600
+SESSION_LIFE = 180 * 24 * 3600
 
 _lock = threading.Lock()
 
 
-def load_credentials():
-    """按优先级读取凭据；未配置返回 (None, None)"""
-    user = os.environ.get("UL_USER")
-    passwd = os.environ.get("UL_PASS")
-    if user and passwd:
-        return user, passwd
-    if CONFIG_FILE.exists():
-        try:
-            cfg = json.loads(CONFIG_FILE.read_text())
-            user = cfg.get("user")
-            passwd = cfg.get("pass")
-            if user and passwd:
-                return user, passwd
-        except Exception:
-            pass
-    return None, None
+def get_conn():
+    import sqlite3
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
-USER, PASS = load_credentials()
+# ---------------- 用户与 Token 存取 ----------------
 
-
-def load_tokens():
-    if TOKEN_FILE.exists():
-        try:
-            return json.loads(TOKEN_FILE.read_text())
-        except Exception:
-            return {}
-    return {}
-
-
-def save_tokens(tokens):
-    TOKEN_FILE.write_text(json.dumps(tokens))
-
-
-def is_token_valid(token):
-    with _lock:
-        tokens = load_tokens()
-        exp = tokens.get(token, 0)
-        return exp > time.time()
-
-
-def issue_token():
-    token = secrets.token_urlsafe(32)
-    with _lock:
-        tokens = load_tokens()
-        tokens[token] = time.time() + TOKEN_LIFE
-        save_tokens(tokens)
-    return token
-
-
-def revoke_token(token):
-    with _lock:
-        tokens = load_tokens()
-        tokens.pop(token, None)
-        save_tokens(tokens)
-
-
-def check_basic(auth_header):
-    """Authorization: Basic base64(user:pass)"""
-    if not auth_header or not auth_header.startswith("Basic "):
-        return False
-    if not USER or not PASS:
-        return False
+def db_user_by_name(username):
+    conn = get_conn()
     try:
-        raw = base64.b64decode(auth_header.split(" ", 1)[1]).decode("utf-8")
-        u, p = raw.split(":", 1)
-        return u == USER and p == PASS
+        return conn.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
+    finally:
+        conn.close()
+
+
+def db_user_by_id(uid):
+    conn = get_conn()
+    try:
+        return conn.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
+    finally:
+        conn.close()
+
+
+def hash_password(password: str) -> str:
+    salt = secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 120000)
+    return f"pbkdf2_sha256$120000${salt.hex()}${digest.hex()}"
+
+
+def verify_password(password: str, stored: str) -> bool:
+    try:
+        algo, iters, salt_hex, hash_hex = stored.split("$")
+        if algo != "pbkdf2_sha256":
+            return False
+        digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"),
+                                     bytes.fromhex(salt_hex), int(iters))
+        return secrets.compare_digest(digest.hex(), hash_hex)
     except Exception:
         return False
 
 
-def check_cookie(headers):
+def create_user(username, password, display_name=None):
+    if db_user_by_name(username) is not None:
+        return False, "用户名已存在"
+    if not password or len(password) < 4:
+        return False, "密码至少 4 位"
+    conn = get_conn()
+    try:
+        conn.execute("INSERT INTO users(username, password_hash, display_name) VALUES (?,?,?)",
+                     (username, hash_password(password), display_name or username))
+        conn.commit()
+        return True, ""
+    finally:
+        conn.close()
+
+
+def issue_token(user_id, scope="session"):
+    token = secrets.token_urlsafe(32)
+    with _lock:
+        conn = get_conn()
+        conn.execute(
+            "INSERT INTO api_tokens(user_id, token, scope, expires_at) VALUES (?,?,?,?)",
+            (user_id, token, scope,
+             time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() + SESSION_LIFE))))
+        conn.commit()
+        conn.close()
+    return token
+
+
+def revoke_token(token):
+    if not token:
+        return
+    with _lock:
+        conn = get_conn()
+        conn.execute("DELETE FROM api_tokens WHERE token=?", (token,))
+        conn.commit()
+        conn.close()
+
+
+def token_user(token):
+    """token -> (user_id, username)；无效返回 None"""
+    if not token:
+        return None
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT t.user_id, u.username FROM api_tokens t JOIN users u ON t.user_id=u.id "
+            "WHERE t.token=? AND (t.expires_at IS NULL OR t.expires_at > datetime('now','localtime'))",
+            (token,)).fetchone()
+        if row is None:
+            return None
+        conn.execute("UPDATE api_tokens SET last_used=datetime('now','localtime') WHERE token=?", (token,))
+        conn.commit()
+        return row["user_id"], row["username"]
+    finally:
+        conn.close()
+
+
+# ---------------- 鉴权 ----------------
+
+def auth_from_cookie(headers):
     cookie = headers.get("Cookie", "")
     for part in cookie.split(";"):
         part = part.strip()
         if part.startswith(COOKIE_NAME + "="):
-            return is_token_valid(part[len(COOKIE_NAME) + 1:])
-    return False
+            return token_user(part[len(COOKIE_NAME) + 1:])
+    return None
 
 
-def send_login_page(handler, err=False):
+def auth_from_bearer(headers):
+    auth = headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        return token_user(auth.split(" ", 1)[1].strip())
+    return None
+
+
+def auth_from_basic(headers):
+    auth = headers.get("Authorization", "")
+    if not auth.startswith("Basic "):
+        return None
+    try:
+        raw = base64.b64decode(auth.split(" ", 1)[1]).decode("utf-8")
+        u, p = raw.split(":", 1)
+    except Exception:
+        return None
+    row = db_user_by_name(u)
+    if row is None or not verify_password(p, row["password_hash"]):
+        return None
+    return row["id"], row["username"]
+
+
+def current_user(headers):
+    """按 Cookie / Bearer / Basic 依次鉴权，返回 (user_id, username) 或 None"""
+    return (auth_from_cookie(headers)
+            or auth_from_bearer(headers)
+            or auth_from_basic(headers))
+
+
+# ---------------- 页面与静态服务 ----------------
+
+def send_login_page(handler, err=None):
     html = ROOT / "login.html"
     if html.exists():
         body = html.read_bytes()
     else:
         body = b"<html><body>Login required</body></html>"
     if err:
-        body = body.replace(b"__ERR__", "用户名或密码错误，请重试".encode("utf-8"))
+        body = body.replace(b"__ERR__", err.encode("utf-8"))
     handler.send_response(200)
     handler.send_header("Content-Type", "text/html; charset=utf-8")
+    handler.send_header("Content-Length", str(len(body)))
+    handler.send_header("Cache-Control", "no-store")
+    handler.end_headers()
+    handler.wfile.write(body)
+
+
+def send_data_js(handler, uid, username):
+    data = dump_json(username)
+    row = db_user_by_id(uid)
+    data["user"] = {
+        "id": uid,
+        "username": username,
+        "display_name": row["display_name"] if row else username,
+    }
+    js = "window.UTILITY_DATA = " + json.dumps(data, ensure_ascii=False, separators=(",", ":")) + ";"
+    body = js.encode("utf-8")
+    handler.send_response(200)
+    handler.send_header("Content-Type", "application/javascript; charset=utf-8")
     handler.send_header("Content-Length", str(len(body)))
     handler.send_header("Cache-Control", "no-store")
     handler.end_headers()
@@ -153,6 +237,11 @@ def serve_static(handler, path):
     handler.wfile.write(body)
 
 
+def set_session_cookie(handler, token):
+    handler.send_header("Set-Cookie",
+                        f"{COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={COOKIE_MAX_AGE}")
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -169,25 +258,49 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             return {}
 
+    def _redirect(self, location):
+        self.send_response(302)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def do_POST(self):
-        if self.path.split("?")[0] not in ("/login", "/logout"):
+        path = self.path.split("?")[0]
+        if path not in ("/login", "/logout", "/register"):
             self.send_error(404)
             return
         form = self._read_form()
-        if self.path.split("?")[0] == "/login":
+
+        if path == "/login":
             u = (form.get("user") or [""])[0]
             p = (form.get("pass") or [""])[0]
-            if USER and PASS and u == USER and p == PASS:
-                token = issue_token()
+            row = db_user_by_name(u)
+            if row is not None and row["is_active"] and verify_password(p, row["password_hash"]):
+                token = issue_token(row["id"])
                 self.send_response(302)
                 self.send_header("Location", "/")
-                self.send_header("Set-Cookie",
-                                 f"{COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={COOKIE_MAX_AGE}")
+                self.send_header("Content-Length", "0")
+                set_session_cookie(self, token)
                 self.end_headers()
             else:
+                self._redirect("/login.html?err=1")
+
+        elif path == "/register":
+            u = (form.get("user") or [""])[0].strip()
+            p = (form.get("pass") or [""])[0]
+            dn = (form.get("display_name") or [""])[0].strip() or None
+            ok, msg = create_user(u, p, dn)
+            if ok:
+                row = db_user_by_name(u)
+                token = issue_token(row["id"])
                 self.send_response(302)
-                self.send_header("Location", "/login.html?err=1")
+                self.send_header("Location", "/")
+                self.send_header("Content-Length", "0")
+                set_session_cookie(self, token)
                 self.end_headers()
+            else:
+                self._redirect("/login.html?err=2&msg=" + urllib.parse.quote(msg))
+
         else:  # /logout
             cookie = self.headers.get("Cookie", "")
             for part in cookie.split(";"):
@@ -196,17 +309,22 @@ class Handler(BaseHTTPRequestHandler):
                     revoke_token(part[len(COOKIE_NAME) + 1:])
             self.send_response(302)
             self.send_header("Location", "/login.html")
+            self.send_header("Content-Length", "0")
             self.send_header("Set-Cookie",
                              f"{COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0")
             self.end_headers()
 
     def do_GET(self):
         path = self.path.split("?")[0]
-        if path in ("/login", "/logout"):
+        if path in ("/login", "/logout", "/register"):
             self.send_error(404)
             return
-        authed = check_cookie(self.headers) or check_basic(self.headers.get("Authorization"))
-        if authed:
+        user = current_user(self.headers)
+        if user:
+            uid, username = user
+            if path == "/data.js":
+                send_data_js(self, uid, username)
+                return
             serve_static(self, path if path != "/" else "/index.html")
             return
         # 未登录：脚本/数据类返回 401，页面类回登录页
@@ -216,13 +334,17 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
         else:
-            send_login_page(self, path == "/login.html" and "err=1" in self.path)
+            err = None
+            if path == "/login.html" and "err=1" in self.path:
+                err = "用户名或密码错误，请重试"
+            elif path == "/login.html" and "err=2" in self.path:
+                qs = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+                err = "注册失败：" + (qs.get("msg", [""])[0] or "用户名已存在")
+            send_login_page(self, err)
 
 
 if __name__ == "__main__":
-    TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
-    if not USER or not PASS:
-        print("WARNING: credentials not configured (set UL_USER/UL_PASS or auth_config.json); logins will be rejected", flush=True)
+    Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     server = ThreadingHTTPServer(("127.0.0.1", 8099), Handler)
-    print("UtilityLog auth gateway listening on 127.0.0.1:8099", flush=True)
+    print("UtilityLog auth gateway (0.2 multi-user) listening on 127.0.0.1:8099", flush=True)
     server.serve_forever()

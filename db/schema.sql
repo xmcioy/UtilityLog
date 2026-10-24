@@ -1,20 +1,20 @@
 -- ============================================================
 -- UtilityLog 数据库 Schema（SQLite）
--- 版本: 0.1.0
+-- 版本: 0.2.0
 -- 说明:
---   - 当前版本为「单用户/多家庭」结构（families + 按费种拆表）
---   - 多用户（users / api_tokens / user_settings）为 0.2 规划表，
---     表定义已预置在本文件末尾，供升级迁移使用
+--   - 多用户（users / api_tokens / user_settings）已启用
+--   - families 与 bills_* 均带 user_id，数据按用户隔离
 -- ============================================================
 
 PRAGMA foreign_keys = ON;
 
 -- ------------------------------------------------------------
--- 家庭表（当前：账单归属的家庭；0.2 起：归属 user_id）
+-- 家庭表（账单归属的家庭；归属 user_id 用户）
 -- ------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS families (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     name       TEXT NOT NULL UNIQUE,
+    user_id    INTEGER REFERENCES users(id),
     created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
 
@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS families (
 CREATE TABLE IF NOT EXISTS bills_water (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
     family_id         INTEGER NOT NULL REFERENCES families(id),
+    user_id           INTEGER REFERENCES users(id),
     bill_month        TEXT NOT NULL,              -- YYYY-MM
     usage             REAL,                       -- 用量 m³
     usage_unit        TEXT DEFAULT 'm³',
@@ -54,6 +55,7 @@ CREATE TABLE IF NOT EXISTS bills_water (
 CREATE TABLE IF NOT EXISTS bills_electric (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     family_id           INTEGER NOT NULL REFERENCES families(id),
+    user_id             INTEGER REFERENCES users(id),
     bill_month          TEXT NOT NULL,            -- YYYY-MM
     usage               REAL,                     -- 总用量 kWh
     usage_unit          TEXT DEFAULT 'kWh',
@@ -86,6 +88,7 @@ CREATE TABLE IF NOT EXISTS bills_electric (
 CREATE TABLE IF NOT EXISTS bills_gas (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     family_id      INTEGER NOT NULL REFERENCES families(id),
+    user_id        INTEGER REFERENCES users(id),
     bill_month     TEXT NOT NULL,                 -- YYYY-MM
     usage          REAL,                          -- 用量 m³
     usage_unit     TEXT DEFAULT 'm³',
@@ -105,7 +108,7 @@ CREATE TABLE IF NOT EXISTS bills_gas (
 );
 
 -- ============================================================
--- 以下为 0.2 多用户规划表（v0.1.0 起预置，暂不启用）
+-- 多用户表（0.2 起启用）
 -- ============================================================
 
 -- 用户表
@@ -139,8 +142,5 @@ CREATE TABLE IF NOT EXISTS user_settings (
     updated_at      TEXT
 );
 
--- 迁移：0.2 时给 bills_* 增加 user_id 列
--- ALTER TABLE families ADD COLUMN user_id INTEGER REFERENCES users(id);
--- ALTER TABLE bills_water ADD COLUMN user_id INTEGER REFERENCES users(id);
--- ALTER TABLE bills_electric ADD COLUMN user_id INTEGER REFERENCES users(id);
--- ALTER TABLE bills_gas ADD COLUMN user_id INTEGER REFERENCES users(id);
+-- 迁移说明：0.2 已为 families 与 bills_* 增加 user_id 列（正式 DDL 见上）
+-- 旧库升级请使用 db/migrations/migrate_multiuser.py（自动备份 + ALTER + 数据归属）
