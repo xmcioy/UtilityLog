@@ -85,6 +85,28 @@ MySQL 后端：建库 + 专属低权限用户后，把 `db_config.json` 写入�
 
 完整命令与 nginx 配置见 [docs/INSTALL.md](docs/INSTALL.md)。
 
+## 一键部署 / 升级（推荐）
+
+```bash
+bash scripts/deploy.sh install    # 首次：建库建表 → 同步源码到运行目录 → 配置 launchd → 启动验证
+bash scripts/deploy.sh upgrade    # 升级：git pull → 同步 → 幂等 schema → 重启 → 验证
+```
+
+脚本用 `$HOME` 推导所有路径，不硬编码用户名；运行数据与凭据（`data/` `images/` `temp/`
+`db_config.json` `auth_config.json` `.auth_tokens.json` `.htpasswd`）在同步时自动排除，
+**升级只替换程序，不触碰你的数据**。同时会创建 `site/images → images/` 软链，
+让网页能访问账单截图。
+
+## 提交前敏感信息扫描
+
+```bash
+bash scripts/install_hooks.sh    # 安装 git pre-commit hook
+```
+
+hook 会在每次 `git commit` 前扫描暂存区，命中本机绝对路径、私域域名、访问令牌、
+API 密钥、明文密码等私密内容时**阻止提交**并指出具体位置。
+仓库的 `.gitignore` 已覆盖所有运行数据与凭据文件。
+
 ## 用 AI 编程客户端安装
 
 把 [docs/AI_AGENTS.md](docs/AI_AGENTS.md) 里的一段话粘贴给 Codex / Workbuddy 等任意 agentic CLI，它会自动完成克隆、初始化、配置凭据、启动网关、同步站点。

@@ -87,6 +87,29 @@ MySQL backend: create DB + dedicated low-priv user, write `db_config.json` into 
 
 Full commands and nginx config: [docs/INSTALL.md](docs/INSTALL.md) (中文) / [docs/INSTALL.en.md](docs/INSTALL.en.md) (English, optional).
 
+## One-shot deploy / upgrade (recommended)
+
+```bash
+bash scripts/deploy.sh install    # first run: create DB → sync source to runtime dir → configure launchd → start & verify
+bash scripts/deploy.sh upgrade    # upgrade: git pull → sync → idempotent schema → restart → verify
+```
+
+All paths are derived from `$HOME` (no hardcoded usernames). Runtime data and credentials
+(`data/` `images/` `temp/` `db_config.json` `auth_config.json` `.auth_tokens.json` `.htpasswd`)
+are excluded from the sync — **upgrades replace the program only, your data is untouched**.
+The script also creates the `site/images → images/` symlink so bill screenshots are reachable.
+
+## Pre-commit sensitive-data scan
+
+```bash
+bash scripts/install_hooks.sh    # install the git pre-commit hook
+```
+
+The hook scans staged content before every `git commit` and **blocks the commit** when it
+finds local absolute paths, private-domain names, access tokens, API keys or plaintext
+passwords — pointing at the exact file and line. `.gitignore` already covers every
+runtime-data and credential file.
+
 ## Install with an AI coding agent
 
 Copy the one-shot prompt in [docs/AI_AGENTS.md](docs/AI_AGENTS.md) into Codex / Workbuddy / any agentic CLI. The agent will clone, init, configure credentials, start the gateway and sync the site automatically.

@@ -7,6 +7,7 @@ All notable changes to this project will be documented in this file.
 ## [0.3.2] - 2026-10-24
 
 ### 修复
+- **2026-10-24 21:48 · workbuddy** — 个人信息清理 + git 历史重写 + 源码/运行隔离强化（文件：.gitignore auth_server.py scripts/deploy.sh scripts/pre-commit.py scripts/install_hooks.sh docs/API.md docs/CODE_WALKTHROUGH.md docs/DESIGN.md docs/KNOWN_ISSUES.md AGENTS.md）
 - **2026-10-24 21:22 · workbuddy** — 0.3.2 缺陷修复批次：id 跨表冲突/路径穿越/Content-Length/XSS/is_active 等 15 项（文件：scripts/utility.py scripts/db_backend.py auth_server.py site/index.html db/schema.sql db/schema.mysql.sql db/migrations/migrate_families_unique.py docs/DESIGN.md docs/KNOWN_ISSUES.md skill/SKILL.md CHANGELOG.md）
 - **id 跨表冲突导致误删误改**（数据损坏）：三张 bills 表各自独立自增，id 空间互不重叠，`find_bill_table()` 按序扫描命中首个即返回 → `delete 1` 永远删的是水费。改为多表命中时报错并要求 `--type` 消歧；`update` / `delete` 新增 `--type water|electric|gas`
 - **update/delete 假成功**：缺失 `--user` 时 `WHERE user_id=NULL` 恒不匹配却仍打印成功。补 `require_user` 校验与 `rowcount` 校验
@@ -25,6 +26,30 @@ All notable changes to this project will be documented in this file.
 ### 新增
 - CLI 补齐档位参数：`add` / `update` 支持 `--current-tier` / `--tier-remaining` / `--year-usage` / `--tier-detail`，打通 `skill/SKILL.md`「分档计费必须记录」的强制要求
 - 迁移脚本 `db/migrations/migrate_families_unique.py`：备份 → 重建表 → 行数校验 → 外键完整性检查 → 失败自动回滚，检测到跨用户重名时中止并列出冲突
+
+### 安全与隔离
+- **个人信息清理**：移除文档中的真实小区名、真实账号名、内网仓库域名、
+  含用户名的 launchd 标签与本机绝对路径，全部替换为通用示例
+- **git 历史重写**：用 `git filter-branch` 清理 21 个提交中的敏感内容，
+  删除 `refs/original` 备份引用、过期 reflog 与悬空对象，
+  已强制推送到 github 与 gitea（备份见本地 `~/UtilityLog-backup/`）
+- **提交前敏感扫描 hook**：`scripts/pre-commit.py` + `scripts/install_hooks.sh`，
+  命中本机绝对路径 / 私域域名 / 访问令牌 / API 密钥 / 明文密码时阻止提交并指出位置
+- **`.gitignore` 补强**：`*cred*.json` / `*secret*.json` / `*token*.json` /
+  `*.sqlite` / `*.sqlite3` / 编辑器临时文件
+- **launchd 标签按用户名派生**：`deploy.sh` 原硬编码具体用户名（注释却写「不硬编码」），
+  改为 `com.$(id -un).utility-auth`
+- **源码 / 运行隔离**：rsync 排除项补 `AGENTS.md` / `*.bak`，
+  运行目录只保留「程序副本 + 运行数据 + 凭据」，不含本机协作文件
+
+### 修复
+- **账单截图全部 404**：双重原因 —— 0.3.1 脱敏清理时删掉了 `site/images` 软链，
+  且 `serve_static` 直接用 `self.path` 未做 URL 解码，中文文件名无法命中磁盘。
+  现由 `deploy.sh link_images()` 创建软链，并新增路径解码；
+  `serve_static` 改用 `abspath` 保留软链结构 + 显式白名单 `images/` 目录
+- `docs/CODE_WALKTHROUGH.md` 的「运行现状（本机实测）」改为通用部署形态描述，
+  本机专属信息（进程号 / 用户名标签 / 绝对路径）移入不入库的协作区
+- `README.md` / `README.zh-CN.md` 补充一键部署与提交前扫描章节
 
 ### 说明
 - `update` / `delete` 现在会拒绝无 `--type` 的歧义 id 操作（此前会误伤其他费种账单），AI 录入流程需相应带上 `--type`
