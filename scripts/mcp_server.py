@@ -57,8 +57,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import utility as U  # noqa: E402
 
 SERVER_NAME = "utilitylog"
-# 版本号与项目整体版本保持一致（0.5.0），不要各写各的
-SERVER_VERSION = "0.5.0"
+# 版本号与项目整体版本保持一致（0.5.1），不要各写各的
+SERVER_VERSION = "0.5.1"
 
 
 # MySQL 后端返回 DATETIME/DECIMAL 对象，SQLite 返回字符串/浮点 ——

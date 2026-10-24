@@ -133,7 +133,7 @@ ensure_python_deps() {
 
 usage() {
   cat <<'EOF'
-UtilityLog deploy.sh 0.5.0
+UtilityLog deploy.sh 0.5.1
 
 用法:
   ./deploy.sh install    首次部署（建库建表 + 安装程序 + 配置服务 + 验证 + 端到端回归）

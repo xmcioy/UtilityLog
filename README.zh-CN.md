@@ -1,6 +1,6 @@
 # UtilityLog
 
-![Version](https://img.shields.io/badge/version-0.5.0-2563eb) ![License](https://img.shields.io/badge/license-MIT-green) ![Python](https://img.shields.io/badge/Python-3.9%2B-3776ab)
+![Version](https://img.shields.io/badge/version-0.5.1-2563eb) ![License](https://img.shields.io/badge/license-MIT-green) ![Python](https://img.shields.io/badge/Python-3.9%2B-3776ab)
 
 家庭水/电/燃气账单自托管记录系统（多家庭 · 多费种）。支持**网页上传账单自动识别**、手工录入、AI 技能（MCP）三种录入方式，统一存入私有数据库并可视化展示。
 
@@ -25,8 +25,10 @@ English README: [README.md](README.md)
 
 ```bash
 git clone <仓库地址> UtilityLog && cd UtilityLog
-bash scripts/deploy.sh install     # 首次部署：建库 → 同步 → launchd → 自动验证
-bash scripts/deploy.sh upgrade     # 升级：只换程序，数据与凭据保留
+# 跨平台（macOS / Linux / Windows，Windows 用 python 代替 python3）
+python3 scripts/deploy.py install
+python3 scripts/deploy.py upgrade
+# macOS 也可：bash scripts/deploy.sh install|upgrade（launchd 托管）
 ```
 
 或手动运行：`python3 scripts/utility.py init && python3 auth_server.py`（监听 127.0.0.1:8099，前面配 nginx 反代）。详见 [docs/INSTALL.md](docs/INSTALL.md)。

@@ -1007,6 +1007,9 @@ class UtilityHTTPServer(ThreadingHTTPServer):
 if __name__ == "__main__":
     Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     ensure_auth_tables()
-    server = UtilityHTTPServer(("127.0.0.1", 8099), Handler)
-    print(f"UtilityLog auth gateway (0.5.0, backend={db_backend.get_backend()}) listening on 127.0.0.1:8099", flush=True)
+    # 端口可用 UL_AUTH_PORT 覆盖（跨平台部署常见：Windows/服务器上 8099 可能被占用）
+    port = int(os.environ.get("UL_AUTH_PORT") or 8099)
+    server = UtilityHTTPServer(("127.0.0.1", port), Handler)
+    print(f"UtilityLog auth gateway (0.5.1, backend={db_backend.get_backend()}) "
+          f"listening on 127.0.0.1:{port}", flush=True)
     server.serve_forever()

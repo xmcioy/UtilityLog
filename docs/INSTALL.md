@@ -1,10 +1,16 @@
-# UtilityLog 安装指南（传统命令 + MySQL 部署）
+# UtilityLog 安装指南（跨平台 · 传统命令 + MySQL 部署）
 
 ## 环境要求
 
-- macOS / Linux / Windows（Python 3.9+，标准库 + 可选 pymysql）
-- 存储：SQLite（默认，零依赖）或 MySQL 8+（可选，需 `pip install pymysql`）
-- 可选：nginx（公网反代）、Cloudflare Tunnel（公网域名）
+| 项 | 要求 | 说明 |
+|---|---|---|
+| 系统 | macOS / Linux / Windows | 核心代码纯 Python 标准库，三平台一致 |
+| Python | 3.9+ | Windows 用 `python`，macOS/Linux 用 `python3` |
+| 依赖 | 无（可选 `pymysql`、`pypdf`） | 默认 SQLite 零依赖；MySQL 后端需 pymysql；账单 PDF 识别需 pypdf |
+| 可选 | nginx / Cloudflare Tunnel | 公网反代 |
+
+> **跨平台部署脚本**：`python3 scripts/deploy.py`（Windows 用 `python scripts\deploy.py`），
+> 见本文第 9 节。`scripts/deploy.sh` 是 macOS（launchd + brew 风格）专用脚本，二者功能等价。
 
 ## 0. 目录结构（0.3 起：源码 / 运行分离）
 
@@ -213,10 +219,75 @@ server {
 - 用途：将截图 / PDF 账单交给 AI 客户端解析 → 调用 `scripts/utility.py` 入库 → `scripts/sync_site.py` 同步 → 腾讯文档表格覆盖式更新
 - 腾讯文档能力依赖部署者自行接入（文件 ID、文件夹 ID 等配置项替换占位符）
 
+## 9. 跨平台部署脚本（deploy.py）
+
+`scripts/deploy.py` 是纯标准库实现，macOS / Linux / Windows 行为一致（`deploy.sh` 仅 macOS 可用）：
+
+```bash
+python3 scripts/deploy.py doctor      # 环境体检：平台、依赖、端口、服务方案
+python3 scripts/deploy.py install     # 首次部署：同步 + 依赖 + 建库 + 启动 + 验证
+python3 scripts/deploy.py upgrade     # 升级：只换程序，数据与凭据保留
+python3 scripts/deploy.py start|stop|status|verify
+```
+
+Windows 下把 `python3` 换成 `python`，路径用反斜杠（`python scripts\deploy.py install`）。
+
+| 平台 | 服务托管方式 | 回退 |
+|---|---|---|
+| macOS | launchd（`~/Library/LaunchAgents/*.plist`，KeepAlive） | 后台进程 |
+| Linux | systemd 用户服务（`~/.config/systemd/user/utility-auth.service`） | 后台进程 |
+| Windows | 后台进程（DETACHED_PROCESS，日志落运行目录） | — |
+
+常用参数：`--app-dir`（运行目录）、`--port`（auth 端口，也可用 `UL_AUTH_PORT`）、
+`--service auto|launchd|systemd|process|none`、`--sim windows|linux`（预览其它平台行为）。
+离线环境可设 `UL_SKIP_DEPS=1` 跳过 pip 安装。
+
+### Linux 手动托管（不想用脚本时）
+
+`/etc/systemd/system/utility-auth.service`（系统级）或 `~/.config/systemd/user/`（用户级）：
+
+```ini
+[Unit]
+Description=UtilityLog auth gateway
+After=network.target
+
+[Service]
+Type=simple
+Environment=UL_APP_DIR=/opt/utilitylog
+WorkingDirectory=/opt/utilitylog
+ExecStart=/usr/bin/python3 /opt/utilitylog/auth_server.py
+Restart=always
+
+[Install]
+WantedBy=multi-user.target      # 用户级改为 default.target
+```
+
+```bash
+sudo systemctl daemon-reload && sudo systemctl enable --now utility-auth
+```
+
+### Windows 常驻（可选）
+
+```bat
+schtasks /create /tn UtilityLog /tr "python C:\utilitylog\auth_server.py" /sc onstart /ru SYSTEM
+schtasks /run /tn UtilityLog
+```
+
+Windows 上 `site/images` 软链会自动退回目录联接（junction，无需管理员）；
+若仍失败，手动把运行目录 `images/` 复制到 `site/images/` 即可显示账单附件。
+
+### 各平台差异一览（已验证/规避）
+
+- **端口**：`auth_server.py` 端口可用 `UL_AUTH_PORT` 覆盖（默认 8099），避免 Windows/服务器上端口冲突
+- **换行与路径**：全部用 `os.path` / `pathlib`，无硬编码 `/`；同步用 `shutil` 而非 `rsync`
+- **依赖安装**：统一 `sys.executable -m pip install --user`，不依赖 brew/apt/msi
+- **代理污染**：验证请求显式禁用代理（`ProxyHandler({})`），避免 `HTTP_PROXY` 导致本机探测被劫到外网
+- **Python 命令名**：文档 Windows 用 `python`，其余用 `python3`
+
 ## 常见问题
 
 - **登录页打不开 / 401 循环**：确认 `auth_config.json` 或环境变量已配置，且源码 `site/` 目录存在 `login.html`、`index.html`。
 - **数据没更新**：0.3 起网关 `/data.js` 动态导出，正常无需手工同步；离线导出用 `sync_site.py`；浏览器强刷（Cmd+Shift+R）。
-- **端口占用**：修改 `auth_server.py` 底部 `ThreadingHTTPServer(("127.0.0.1", 8099), ...)` 端口后重启。
+- **端口占用**：设 `UL_AUTH_PORT=9099` 重启即可（不必改代码）；nginx 反代端口同步调整。
 - **数据库路径**：默认 `<运行目录>/data/utility.db`；运行目录由 `UL_APP_DIR` > `UL_ROOT` > 源码根推导，可用 `UL_DB` 直接覆盖 SQLite 路径。
 - **MySQL 连不上**：确认 `db_config.json` 在运行目录且 `UL_BACKEND=mysql`（或配置 `backend: "mysql"`）；用 `ul_app` 登录验证权限，跨库访问被拒属正常。

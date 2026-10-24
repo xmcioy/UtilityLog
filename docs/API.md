@@ -1,6 +1,6 @@
 # UtilityLog API 文档（API.md）
 
-> 版本：0.5.0（2026-10-24）
+> 版本：0.5.1（2026-10-24）
 > 基准实现：`auth_server.py`（认证网关，`ThreadingHTTPServer`，默认监听 `127.0.0.1:8099`）。
 > 本地访问经 nginx `:8089` 反代到 `:8099`；公网经 Cloudflare Tunnel 暴露。
 > 本文档与代码同步维护；路由或参数变更时必须同步更新。

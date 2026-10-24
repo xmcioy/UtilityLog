@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.5.1] - 2026-10-24
+
+### 新增
+- **2026-10-24 23:36 · workbuddy** — 0.5.1 跨平台部署脚本 deploy.py + UL_AUTH_PORT + INSTALL/README 跨平台章节（文件：scripts/deploy.py auth_server.py docs/INSTALL.md README.md README.zh-CN.md docs/API.md docs/DESIGN.md scripts/deploy.sh scripts/mcp_server.py CHANGELOG.md）
+- **跨平台部署工具 `scripts/deploy.py`**（纯标准库，macOS / Linux / Windows 通用）：
+  - 源码同步用 `shutil`（不再依赖 rsync）；依赖安装用 `sys.executable -m pip install --user`（不依赖 brew/apt）；HTTP 验证显式禁用代理
+  - 服务托管按平台自动选择：`launchd`（macOS）→ `systemd --user`（Linux）→ 后台进程（Windows / 无 systemd 环境），注册失败一律回退后台进程
+  - Windows 上 `site/images` 软链自动退回目录联接（junction，无需管理员）
+  - 命令：`doctor` / `install` / `upgrade` / `start` / `stop` / `status` / `verify`；`--app-dir --port --service --sim` 参数
+- **`UL_AUTH_PORT` 环境变量**：auth_server 端口不再写死 8099，跨平台部署遇到端口冲突可直接换端口
+
+### 文档
+- `docs/INSTALL.md` 新增「跨平台部署」章节：三平台服务托管对照、Linux systemd 单元示例、Windows schtasks 常驻示例、已规避的平台差异清单
+- README 快速开始改为跨平台命令（Windows 用 `python`），保留 macOS 的 `deploy.sh` 路径
+
+### 测试
+- 本机 doctor（含 `--sim linux/windows` 分支预览）；临时目录 + 8100 端口实跑 install：同步 → 建库 → 启动 → 验证 ✅ → 上传燃气 PDF 识别入库 → stop 清理
+
+---
+
 ## [0.5.0] - 2026-10-24
 
 ### 新增

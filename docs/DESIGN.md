@@ -11,7 +11,7 @@ AIGC:
 
 # UtilityLog 设计文档（DESIGN.md）
 
-> 版本：0.5.0（2026-10-24）
+> 版本：0.5.1（2026-10-24）
 > 目标读者：开发者 / AI 客户端（Codex、WorkBuddy 等）——任何需要理解本项目结构、意图或做后续修复改造的角色。
 > 本文档与 `db/schema.sql`、`db/schema.mysql.sql`、`CHANGELOG.md` 同步维护；代码实现偏离本文档时必须更新文档。
 

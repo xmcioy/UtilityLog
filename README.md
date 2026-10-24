@@ -1,6 +1,6 @@
 # UtilityLog
 
-![Version](https://img.shields.io/badge/version-0.5.0-2563eb) ![License](https://img.shields.io/badge/license-MIT-green) ![Python](https://img.shields.io/badge/Python-3.9%2B-3776ab)
+![Version](https://img.shields.io/badge/version-0.5.1-2563eb) ![License](https://img.shields.io/badge/license-MIT-green) ![Python](https://img.shields.io/badge/Python-3.9%2B-3776ab)
 
 Self-hosted utility bill (water / electricity / gas) tracker for multiple households.
 Three ways to enter bills: **web upload with automatic PDF recognition**, manual entry, or an **AI skill (MCP)** — all into one private database with an ECharts dashboard.
@@ -26,8 +26,10 @@ Three ways to enter bills: **web upload with automatic PDF recognition**, manual
 
 ```bash
 git clone <repo-url> UtilityLog && cd UtilityLog
-bash scripts/deploy.sh install     # first deploy: DB + launchd + verify
-bash scripts/deploy.sh upgrade     # upgrades: program only, data & credentials untouched
+# Cross-platform (macOS / Linux / Windows; use `python` on Windows)
+python3 scripts/deploy.py install
+python3 scripts/deploy.py upgrade
+# macOS also: bash scripts/deploy.sh install|upgrade (launchd-managed)
 ```
 
 Or run by hand: `python3 scripts/utility.py init && python3 auth_server.py` (listens on 127.0.0.1:8099, put nginx in front). See [docs/INSTALL.md](docs/INSTALL.md).
