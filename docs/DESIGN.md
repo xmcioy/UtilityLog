@@ -11,7 +11,7 @@ AIGC:
 
 # UtilityLog 设计文档（DESIGN.md）
 
-> 版本：0.4.1（2026-10-24）
+> 版本：0.5.0（2026-10-24）
 > 目标读者：开发者 / AI 客户端（Codex、WorkBuddy 等）——任何需要理解本项目结构、意图或做后续修复改造的角色。
 > 本文档与 `db/schema.sql`、`db/schema.mysql.sql`、`CHANGELOG.md` 同步维护；代码实现偏离本文档时必须更新文档。
 
@@ -487,6 +487,7 @@ Skill 录入：用户 token 调同一 API 入口，等价于网页录入【规�
 
 | 版本 | 日期 | 内容 |
 |---|---|---|
+| 0.5.0 | 2026-10-24 | **网页上传账单自动识别**：`POST /api/bills/upload`（multipart ≤20MB，附件落 `images/uploads/`）解析出草稿不落库，`POST /api/bills` 确认入库/手工录入（复用 MCP 工具层，已登录用户强制执行）；解析器 `scripts/bill_parser.py` 纯文本层解析（国网上海电费分时/上海燃气阶梯/供水分项三类模板 + 非分时兜底），PDF 拆词容错，金额取「应付」保证分项不变式；图片账单走设置页「模型 API」视觉识别（可选）；pypdf 可选依赖由 deploy 自动安装；README 精简并配图，新增 docs/TESTING.md 与 docs/ROADMAP.md |
 | 0.4.1 | 2026-10-24 | **MCP Streamable HTTP 端点**：`POST /mcp` 挂入 auth_server，复用 `scripts/mcp_server.py` 工具层与三通道鉴权，与前端共用 nginx `:8089` 端口（域名只需转发一个端口）；HTTP 通道强制以已认证用户执行（`threading.local` 请求上下文覆盖工具参数 `user`），杜绝冒充；支持 JSON-RPC batch 与纯通知 202；stdio 本地传输保持不变（stdout 重定向从模块级移入 stdio main，消除被 import 时的副作用）；`deploy.sh verify` 增加 `/mcp` 未鉴权 401 检查（直连 + nginx 反代） |
 | 0.3.2 | 2026-10-24 | 缺陷修复批次（详见 `docs/KNOWN_ISSUES.md`）：**id 跨表冲突**（三表 AUTOINCREMENT 空间独立，`delete/update <id>` 会误伤其他费种 → 改为多表命中时报错并要求 `--type` 消歧）；**update 静默失效**（`--sewage-price` / `--month` 别名转换条件恒不成立 → 改为值判空回退，`bill_month` 纳入可写白名单）；**CLI 补齐档位参数**（`--current-tier` / `--tier-remaining` / `--year-usage` / `--tier-detail`，打通 SKILL.md「分档必录」强制要求）；**tier_detail 序列化对称**（add/update 统一 `_norm_tier_detail`，前端 JSON.parse 补 try/catch）；**families 唯一约束对齐**（SQLite 改 `UNIQUE(user_id, name)` + 迁移脚本 `db/migrations/migrate_families_unique.py`）；**路径穿越修复**（`serve_static` 改用 `os.path.commonpath` 边界判断，替代可被 `site_backup/` 绕过的 `startswith`）；**Content-Length 校验**（负数/超长/非法一律 400/413 并关闭连接，消除线程阻塞与请求走私）；**is_active 全通道生效**（Basic 与 Token 通道补校验，停用账号立即失效）；**前端 XSS 防护**（新增 `esc()`，家庭名/档位/月份/截图路径/档位明细/tooltip 全面转义）；**SQLite 外键生效**（`PRAGMA foreign_keys=ON` 逐连接开启 + WAL）；**并发 backlog**（`request_queue_size=128`，80 并发实测全通）；**schema 检测缓存**（免去每连接一次 SHOW TABLES）；**备注列上网页**（note 此前只落库不展示） |
 | 0.3.1 | 2026-10-24 | 数据迁移 MySQL（7 表全量）、连接后幂等自动建表、`scripts/deploy.sh` 一键 install/upgrade、`docs/API.md` 接口文档 |

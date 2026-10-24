@@ -4,6 +4,30 @@ All notable changes to this project will be documented in this file.
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.5.0] - 2026-10-24
+
+### 新增
+- **2026-10-24 23:28 · workbuddy** — 0.5.0 网页上传账单自动识别（bill_parser 三类模板 + /api/bills/upload|/api/bills + settings 卡片）+ README 精简配图 + TESTING/ROADMAP 文档（文件：scripts/bill_parser.py scripts/test_bill_parser.py auth_server.py site/settings.html scripts/deploy.sh README.md README.zh-CN.md docs/TESTING.md docs/ROADMAP.md docs/API.md docs/DESIGN.md CHANGELOG.md docs/images）
+- **网页上传账单自动识别**（不再依赖 AI 技能，技能录入继续可用）：
+  - `POST /api/bills/upload`（multipart，≤20MB）：保存附件到 `images/uploads/`，
+    解析出「草稿」返回，**不落库**；前端设置页「账单上传识别」卡片核对后保存
+  - `POST /api/bills`（JSON）：确认入库 / 手工录入，复用 MCP 工具层校验与 upsert，
+    以已登录用户执行（body 中 `user` 被忽略，防冒充）
+  - 解析器 `scripts/bill_parser.py`：PDF 文本层解析（国网上海分时电费含峰谷四示数/档位/
+    年累计、上海燃气阶梯、供水分项三类模板 + 非分时兜底），PDF 换行拆词容错；
+    金额不变式优先取「应付电费」保证 分项之和=总价，实付零头差异写入 note
+  - 图片账单：本地不做 OCR，配置「模型 API」（OpenAI 兼容视觉接口）后自动识别，
+    未配置则提示人工填写（附件已保存可对照）
+  - pypdf 为可选依赖（BSD），deploy.sh 自动 best-effort 安装，缺失时功能降级不阻塞
+- **文档重构**：README 精简为「版本 / 功能 / 安装」并配架构图与账单样例图；
+  新增 `docs/TESTING.md`（测试说明）与 `docs/ROADMAP.md`（路线图）
+
+### 测试
+- `scripts/test_bill_parser.py`：解析器单元测试 20 项（三类模板 + 降级 + 真实样例回归）
+- 上传识别专项 e2e 12 项：multipart 解析、草稿生成、确认入库、附件回读、401/防冒充
+
+---
+
 ## [0.4.1] - 2026-10-24
 
 ### 新增

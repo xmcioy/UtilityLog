@@ -21,6 +21,8 @@
 会话/API token 持久化于 api_tokens 表（绑定 user_id）
 """
 import base64
+import email.parser
+import email.policy
 import hashlib
 import json
 import os
@@ -44,6 +46,7 @@ SCRIPTS = str(Path(__file__).resolve().parent / "scripts")
 sys.path.insert(0, SCRIPTS)  # 幂等
 from utility import dump_json, user_id_by_name  # noqa: E402
 import mcp_server  # noqa: E402  （MCP 工具层：/mcp 端点复用其 handle() 与工具声明）
+import bill_parser  # noqa: E402  （0.5.0 账单上传识别）
 
 COOKIE_NAME = "ul_token"
 COOKIE_MAX_AGE = 15552000  # 180 天
@@ -499,6 +502,23 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         path = self.path.split("?")[0]
 
+        # 账单上传识别 / 手工录入（0.5.0，需登录；在 _read_form 之前处理，
+        # 因为它们分别是 multipart 与 JSON body）
+        if path == "/api/bills/upload":
+            user = current_user(self.headers)
+            if not user:
+                self._json_err("未登录", 401)
+                return
+            self._handle_bill_upload(user[0], user[1])
+            return
+        if path == "/api/bills":
+            user = current_user(self.headers)
+            if not user:
+                self._json_err("未登录", 401)
+                return
+            self._handle_bill_save(user[1])
+            return
+
         # MCP Streamable HTTP 端点（与前端共用 8089 端口，鉴权同 API）
         if path == "/mcp":
             self._handle_mcp()
@@ -727,6 +747,146 @@ class Handler(BaseHTTPRequestHandler):
 
         self._json_err("未知接口", 404)
 
+    # ---------------- 账单上传识别 / 手工录入（0.5.0） ----------------
+    # 行业惯例：两步式 —— 先上传解析出「草稿」（不落库），人工核对后确认入库；
+    # 确认入口 POST /api/bills 同时服务手工录入，复用 MCP 工具层做校验与 upsert。
+
+    UPLOAD_MAX = 20 << 20  # 20MB
+    IMAGE_MIME = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+                  "webp": "image/webp", "gif": "image/gif"}
+
+    def _read_raw(self, limit):
+        raw_len = self.headers.get("Content-Length")
+        try:
+            length = int(raw_len) if raw_len else 0
+        except (TypeError, ValueError):
+            self.close_connection = True
+            self._json_err("invalid Content-Length", 400)
+            return None
+        if length <= 0 or length > limit:
+            self.close_connection = True
+            self._json_err(f"请求体大小超出限制（> {limit // (1 << 20)}MB）", 413)
+            return None
+        return self.rfile.read(length)
+
+    def _parse_multipart(self, body):
+        """解析 multipart/form-data，返回 (fields, files)。
+
+        用标准库 email 包解析：浏览器上传的二进制 part 无 CTE，
+        get_payload(decode=True) 会原样返回字节（base64/QP 则自动解码）。
+        """
+        ctype = self.headers.get("Content-Type", "")
+        if "multipart/form-data" not in ctype:
+            return None, None
+        msg = email.parser.BytesParser(policy=email.policy.HTTP).parsebytes(
+            b"Content-Type: " + ctype.encode("latin-1") +
+            b"\r\nMIME-Version: 1.0\r\n\r\n" + body)
+        fields, files = {}, []
+        for part in msg.iter_parts():
+            name = part.get_param("name", header="content-disposition")
+            payload = part.get_payload(decode=True)
+            if payload is None:
+                continue
+            filename = part.get_filename()
+            if filename:
+                files.append({"filename": filename, "data": payload})
+            else:
+                fields[name or ""] = payload.decode("utf-8", "replace").strip()
+        return fields, files
+
+    def _handle_bill_upload(self, uid, username):
+        body = self._read_raw(self.UPLOAD_MAX)
+        if body is None:
+            return
+        fields, files = self._parse_multipart(body)
+        if fields is None:
+            self._json_err("Content-Type 必须为 multipart/form-data", 400)
+            return
+        if not files:
+            self._json_err("缺少文件字段", 400)
+            return
+        f = files[0]
+        suffix = f["filename"].rsplit(".", 1)[-1].lower() \
+            if "." in f["filename"] else ""
+        safe = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_",
+                      f["filename"]).strip() or "bill"
+        dest_dir = Path(APP_DIR) / "images" / "uploads"
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / f"{time.strftime('%Y%m%d-%H%M%S')}_{safe}"
+        dest.write_bytes(f["data"])
+        image_rel = f"uploads/{dest.name}"
+        print(f"[upload] user={username} file={dest.name} "
+              f"size={len(f['data'])}", flush=True)
+
+        draft = bill_parser.parse_bill_file(str(dest), f["filename"])
+        if draft.get("message") == "__IMAGE__":
+            # 图片：本地不做 OCR，尝试设置页配置的视觉模型（OpenAI 兼容）
+            draft["message"] = "图片账单："
+            row = None
+            conn = get_conn()
+            try:
+                row = conn.execute(
+                    "SELECT model_api_base, model_api_key, model_name "
+                    "FROM user_settings WHERE user_id=?", (uid,)).fetchone()
+            finally:
+                conn.close()
+            model_conf = dict(row) if row else {}
+            if model_conf.get("model_api_base") and model_conf.get("model_api_key"):
+                fields = bill_parser.parse_image_via_model(
+                    str(dest), model_conf["model_api_base"],
+                    model_conf["model_api_key"], model_conf.get("model_name"),
+                    self.IMAGE_MIME.get(suffix, "image/png"))
+                if fields:
+                    btype = fields.pop("bill_type", None) or fields.pop("type", None)
+                    draft["bill"] = fields
+                    draft["bill_type"] = btype if btype in (
+                        "water", "electric", "gas") else None
+                    core = fields.get("month") and fields.get("usage") is not None \
+                        and fields.get("amount") is not None
+                    draft["parse_ok"] = bool(core and btype)
+                    draft["confidence"] = "medium"
+                    draft["message"] = ("模型识别完成，请核对后保存" if draft["parse_ok"]
+                                        else "模型已识别部分字段，请补全后保存")
+                else:
+                    draft["message"] = ("模型识别失败，请手工填写后保存"
+                                        "（附件已保存，可对照填写）")
+            else:
+                draft["message"] = ("图片暂不能本地识别：可在「设置 → 模型 API」配置视觉"
+                                    "模型后自动识别，或对照图片手工填写（附件已保存）")
+
+        self._json({"ok": True, "file": image_rel, "draft": draft})
+
+    def _handle_bill_save(self, username):
+        """确认入库：JSON body（add_bill 兼容字段）→ 复用 MCP 工具层校验 + upsert"""
+        body = self._read_raw(256 * 1024)
+        if body is None:
+            return
+        try:
+            args = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as e:
+            self._json_err(f"JSON 解析失败: {e}", 400)
+            return
+        if not isinstance(args, dict):
+            self._json_err("请求体必须是 JSON 对象", 400)
+            return
+        args.pop("user", None)  # 网页通道一律以已登录用户入库，防冒充
+
+        mcp_server.set_request_user(username)
+        try:
+            result = mcp_server.tool_add_bill(args)
+        finally:
+            mcp_server.set_request_user(None)
+        text = result["content"][0]["text"] if result.get("content") else ""
+        if result.get("isError"):
+            self._json_err(text or "录入失败", 400)
+            return
+        saved = None
+        try:
+            saved = json.loads(text)
+        except (json.JSONDecodeError, TypeError):
+            pass
+        self._json({"ok": True, "message": "已保存", "bill": saved})
+
     def _handle_api_post(self, path, uid, username):
         import utility as U
 
@@ -848,5 +1008,5 @@ if __name__ == "__main__":
     Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     ensure_auth_tables()
     server = UtilityHTTPServer(("127.0.0.1", 8099), Handler)
-    print(f"UtilityLog auth gateway (0.4.1, backend={db_backend.get_backend()}) listening on 127.0.0.1:8099", flush=True)
+    print(f"UtilityLog auth gateway (0.5.0, backend={db_backend.get_backend()}) listening on 127.0.0.1:8099", flush=True)
     server.serve_forever()

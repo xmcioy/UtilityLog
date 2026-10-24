@@ -123,11 +123,17 @@ ensure_python_deps() {
     /usr/bin/python3 -m pip install --user --quiet pymysql || die "pymysql 安装失败"
   fi
   /usr/bin/python3 -c "import pymysql" >/dev/null 2>&1 || die "pymysql 仍不可用，请手动安装"
+  # pypdf 是「账单上传识别」的可选依赖（0.5.0）：缺失时功能降级提示，不阻塞部署
+  if ! /usr/bin/python3 -c "import pypdf" >/dev/null 2>&1; then
+    log "安装 python 可选依赖 pypdf（账单 PDF 识别）..."
+    /usr/bin/python3 -m pip install --user --quiet pypdf \
+      || warn "pypdf 安装失败，网页上传 PDF 识别不可用（图片识别不受影响）"
+  fi
 }
 
 usage() {
   cat <<'EOF'
-UtilityLog deploy.sh 0.4.1
+UtilityLog deploy.sh 0.5.0
 
 用法:
   ./deploy.sh install    首次部署（建库建表 + 安装程序 + 配置服务 + 验证 + 端到端回归）

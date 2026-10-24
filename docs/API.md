@@ -1,6 +1,6 @@
 # UtilityLog API 文档（API.md）
 
-> 版本：0.4.1（2026-10-24）
+> 版本：0.5.0（2026-10-24）
 > 基准实现：`auth_server.py`（认证网关，`ThreadingHTTPServer`，默认监听 `127.0.0.1:8099`）。
 > 本地访问经 nginx `:8089` 反代到 `:8099`；公网经 Cloudflare Tunnel 暴露。
 > 本文档与代码同步维护；路由或参数变更时必须同步更新。
@@ -36,6 +36,8 @@
 | POST | `/register` | 无需 | 注册新用户（PBKDF2 哈希入库），成功即自动登录 |
 | POST | `/logout` | 无需（读取 Cookie） | 吊销 token、清除 Cookie，302 到 `/login.html` |
 | POST | `/mcp` | 必须 | MCP Streamable HTTP 端点（JSON-RPC 2.0）。鉴权同上；推荐 `Authorization: Bearer <API Key>`。与前端共用 nginx `:8089` 端口 |
+| POST | `/api/bills/upload` | 必须 | 上传账单文件（multipart/form-data），自动解析出草稿（**不落库**），见 4.7 |
+| POST | `/api/bills` | 必须 | 账单确认入库（JSON，add_bill 兼容字段，upsert），见 4.8；同时服务手工录入 |
 | GET | `/data.js` | 必须 | 按当前登录用户动态导出数据（`window.UTILITY_DATA = {...};`） |
 | GET | `/api/me` | 必须 | 当前登录用户信息 |
 | GET | `/api/tokens` | 必须 | API Key 列表（仅前缀）；**列表为空时自动签发一把并一次性返回明文** |
@@ -248,6 +250,47 @@ curl -s -X POST http://127.0.0.1:8089/mcp \
 
 **GET `/api/users`** → 供共享时选择目标用户，只暴露用户名，不含任何凭据。
 
+### 4.7 POST /api/bills/upload（0.5.0 账单上传识别）
+
+`multipart/form-data` 上传账单文件（`file` 字段，PDF / png / jpg / webp，≤20MB），
+自动解析出**草稿**（不落库），前端核对后调 4.8 入库。
+
+| 项 | 说明 |
+|---|---|
+| PDF | 本地解析文本层（pypdf，deploy 自动安装；缺失时返回安装提示并优雅降级） |
+| 图片 | 本地不做 OCR：若「设置 → 模型 API」配置了视觉模型则自动识别，否则返回提示人工填写 |
+| 附件 | 原样保存到运行目录 `images/uploads/<时间戳>_<文件名>`，`file` 字段返回相对路径，可经 `/images/uploads/…` 访问 |
+
+成功响应：
+
+```json
+{ "ok": true, "file": "uploads/20261024-101000_202504 账单.pdf",
+  "draft": { "parse_ok": true, "bill_type": "electric", "confidence": "high",
+             "bill": { "month": "2025-04", "usage": 14, "amount": 7.71,
+                       "peak_usage": 11, "peak_price": 0.617, "...": "…" },
+             "message": "识别成功，请核对后保存" } }
+```
+
+`draft.bill` 字段与 4.8 的入库字段一致；解析失败时 `parse_ok=false` 且只包含能匹配到的字段，绝不编造。
+
+### 4.8 POST /api/bills（0.5.0 确认入库 / 手工录入）
+
+JSON body，字段与 MCP `add_bill` 工具完全兼容（`family`、`month`、`type`、`usage`、
+`amount` 必填，峰谷/分项/档位可选；同家庭同月同类型 upsert 覆盖）。
+入库统一以**当前登录用户**执行（body 里的 `user` 会被忽略，防冒充），
+校验逻辑复用 MCP 工具层（金额不变式由调用方保证）。
+
+```bash
+curl -b cookies.txt -X POST http://127.0.0.1:8089/api/bills \
+  -H "Content-Type: application/json" \
+  -d '{"family":"我的家","month":"2025-04","type":"electric","usage":14,
+       "amount":7.71,"peak_usage":11,"peak_price":0.617,
+       "valley_usage":3,"valley_price":0.307,"image":"uploads/xxx.pdf"}'
+```
+
+成功：`{"ok": true, "message": "已保存", "bill": {"saved": true, "id": 1, …}}`；
+失败：400 + `{"ok": false, "error": "原因"}`（家庭不存在/无权限/参数缺失等）。
+
 ## 5. 错误响应汇总
 
 | 状态码 | 场景 |
@@ -256,7 +299,7 @@ curl -s -X POST http://127.0.0.1:8089/mcp \
 | 401 | 未登录访问需鉴权资源（/data.js、/mcp、/api/*、脚本、图片、CSS、JSON） |
 | 404 | 未知路由（POST 非四接口、GET /login 等）、静态文件不存在、路径穿越被拦截、非成员访问成员表 |
 | 405 | `GET /mcp`（只支持 POST） |
-| 413 | 请求体超限（/mcp 上限 1MB） |
+| 413 | 请求体超限（/mcp 上限 1MB；/api/bills/upload 上限 20MB） |
 
 ## 6. 部署与服务
 
