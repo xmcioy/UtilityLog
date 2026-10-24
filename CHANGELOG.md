@@ -7,6 +7,7 @@ All notable changes to this project will be documented in this file.
 ## [0.5.2] - 2026-10-25
 
 ### 变更
+- **2026-10-25 07:52 · workbuddy** — 0.5.2 已知问题清零（SEC-1/P2-5/P3-5~P3-11/P4-2/P4-3）+ 三份文档收敛进 README 后删除 + 凭据移入钥匙串；新增 test_db_backend 17 项并接入部署验证；e2e 48/48（文件：README.md README.zh-CN.md docs/API.md docs/DESIGN.md docs/TESTING.md docs/CODE_WALKTHROUGH.md docs/INSTALL.md docs/KNOWN_ISSUES.md docs/ROADMAP.md skill/SKILL.md scripts/utility.py scripts/db_backend.py auth_server.py scripts/mcp_server.py scripts/e2e_verify.py scripts/test_db_backend.py scripts/deploy.sh scripts/deploy.py AGENTS.md CHANGELOG.md）
 - **2026-10-25 07:35 · workbuddy** — 0.5.2：上传入口移到首页弹窗（含新建家庭），POST /api/families；修复 nginx client_max_body_size 挡大 PDF 与迁移遇孤儿家庭失败；部署验证增大body探测（文件：auth_server.py site/index.html site/settings.html db/migrations/migrate_family_share.py scripts/deploy.sh scripts/deploy.py docs/API.md docs/INSTALL.md docs/TESTING.md docs/DESIGN.md README.md README.zh-CN.md CHANGELOG.md）
 - **2026-10-25 07:52 · workbuddy** — 0.5.2：已知问题清零（SEC-1 / P2-5 / P3-5~P3-11 / P4-2 / P4-3 全部处理）+ 安装、已知问题、路线图三份文档收敛进 README 后删除（文件：scripts/utility.py scripts/db_backend.py auth_server.py scripts/mcp_server.py scripts/e2e_verify.py scripts/test_db_backend.py README.md README.zh-CN.md docs/API.md docs/DESIGN.md docs/TESTING.md docs/CODE_WALKTHROUGH.md skill/SKILL.md scripts/deploy.py CHANGELOG.md）
 - **上传入口移到看板首页**：头部新增「＋ 上传账单」按钮 + 弹窗（上传/识别/核对/入库全流程），
