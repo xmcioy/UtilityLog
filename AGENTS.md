@@ -40,6 +40,11 @@ bash scripts/deploy.sh upgrade
 > `deploy.sh` 会自动回退为独立后台进程，服务真的起来了才算通过。
 > 要长期常驻，请在本机终端执行：
 > `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.<用户名>.utility-auth.plist`
+> 或装 cron 守护（服务挂了 2 分钟内自愈，健康时静默）：
+> `(crontab -l 2>/dev/null | grep -v ensure_service.sh; echo '*/2 * * * * $HOME/myapp/utilitylog/scripts/ensure_service.sh >> /tmp/ul_watchdog.log 2>&1') | crontab -`
+>
+> **502 排查顺序**：`lsof -nP -iTCP:8099` 看服务在不在 → 不在就
+> `bash scripts/ensure_service.sh`（立即拉起）→ 再查 `~/myapp/utilitylog/auth_server.log`。
 
 **禁止**：先提交再部署 · 部署失败仍提交 · 只跑单元测试不跑部署 ·
 「我本地直接跑能通」就认为部署没问题。

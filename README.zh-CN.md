@@ -139,10 +139,17 @@ API Key 在网页「设置」页重置获得。录入契约见 [skill/SKILL.md](
 - **登录页打不开 / 401 循环**：确认 `auth_config.json` 或 `UL_USER`/`UL_PASS` 已配置。
 - **`curl 127.0.0.1:8099` 返回 502**：环境里的 `HTTP_PROXY` 把本机请求劫走了，
   加 `--noproxy '*'` 再试。
-- **launchd 里没有服务**：SSH / CI / agent 会话没有 GUI 上下文，
-  `launchctl bootstrap gui/$UID` 会失败；`deploy.sh` 会自动回退后台进程
-  （PID 在 `<运行目录>/.auth_server.pid`）。要长期常驻，请在本机终端执行一次
-  `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.<用户名>.utility-auth.plist`。
+- **服务返回 502** — nginx 在听，但 127.0.0.1:8099 上没有服务进程。
+  在 SSH / CI / agent 会话里 `launchctl bootstrap gui/$UID` 会失败（没有 GUI 上下文），
+  所以 `deploy.sh` 会改用后台进程启动。想让它长期常驻，在**本机终端**执行一次：
+  ```bash
+  # 方案 A：launchd（推荐）
+  launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.<用户名>.utility-auth.plist
+  # 方案 B：cron 守护 —— 服务挂了 2 分钟内自动拉起
+  (crontab -l 2>/dev/null | grep -v ensure_service.sh
+   echo '*/2 * * * * $HOME/myapp/utilitylog/scripts/ensure_service.sh >> /tmp/ul_watchdog.log 2>&1') | crontab -
+  ```
+  守护脚本 `scripts/ensure_service.sh` 在服务健康时完全静默，只有 8099 不应答时才动作。
 - **数据没更新**：网关 `/data.js` 是动态导出，浏览器强刷即可；端口冲突设
   `UL_AUTH_PORT=9099` 重启。
 - **远端凭据**：存放在 macOS 钥匙串（`credential.helper=osxkeychain`），

@@ -145,11 +145,19 @@ bill tables. Web sync: `python3 scripts/sync_site.py` (the gateway exports
 - **Login page won't open / 401 loop** — check `auth_config.json` or `UL_USER`/`UL_PASS`.
 - **`curl 127.0.0.1:8099` returns 502** — an `HTTP_PROXY` is hijacking local requests;
   use `curl --noproxy '*'`.
-- **Service not registered in launchd** — SSH/CI/agent sessions lack a GUI context and
-  `launchctl bootstrap gui/$UID` fails; `deploy.sh` falls back to a background process
-  (PID in `<runtime>/.auth_server.pid`). For a persistent service run
-  `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.<user>.utility-auth.plist`
-  once in a real terminal.
+- **Service returns 502** — nginx is up but nothing listens on 127.0.0.1:8099.
+  In SSH/CI/agent sessions `launchctl bootstrap gui/$UID` fails (no GUI context),
+  so `deploy.sh` starts the service as a background process instead. Two ways to
+  make it permanent — run **once in a real terminal**:
+  ```bash
+  # Option A: launchd (recommended)
+  launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.<user>.utility-auth.plist
+  # Option B: cron watchdog — restarts the service within 2 minutes if it dies
+  (crontab -l 2>/dev/null | grep -v ensure_service.sh
+   echo '*/2 * * * * $HOME/myapp/utilitylog/scripts/ensure_service.sh >> /tmp/ul_watchdog.log 2>&1') | crontab -
+  ```
+  The watchdog (`scripts/ensure_service.sh`) is silent while the service is healthy
+  and only acts when port 8099 stops answering.
 - **Data not updating** — the gateway exports `/data.js` dynamically; hard-refresh the
   browser. Port conflict: set `UL_AUTH_PORT=9099` and restart.
 - **Remote credentials** — stored in the macOS Keychain via `credential.helper=osxkeychain`
