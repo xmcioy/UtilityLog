@@ -147,17 +147,18 @@ bill tables. Web sync: `python3 scripts/sync_site.py` (the gateway exports
   use `curl --noproxy '*'`.
 - **Service returns 502** — nginx is up but nothing listens on 127.0.0.1:8099.
   In SSH/CI/agent sessions `launchctl bootstrap gui/$UID` fails (no GUI context),
-  so `deploy.sh` starts the service as a background process instead. Two ways to
-  make it permanent — run **once in a real terminal**:
+  so `deploy.sh` starts the service as a **daemonized background process**
+  (double fork + setsid, so it is not reaped when the launching session ends).
+  To survive reboots, run **once in a real terminal**:
   ```bash
-  # Option A: launchd (recommended)
+  # Option A: launchd (recommended — starts at login, restarts on crash)
   launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.<user>.utility-auth.plist
   # Option B: cron watchdog — restarts the service within 2 minutes if it dies
   (crontab -l 2>/dev/null | grep -v ensure_service.sh
    echo '*/2 * * * * $HOME/myapp/utilitylog/scripts/ensure_service.sh >> /tmp/ul_watchdog.log 2>&1') | crontab -
   ```
-  The watchdog (`scripts/ensure_service.sh`) is silent while the service is healthy
-  and only acts when port 8099 stops answering.
+  Manual first aid: `bash scripts/ensure_service.sh` (silent while healthy).
+  Logs: `<runtime>/auth_server.log`.
 - **Data not updating** — the gateway exports `/data.js` dynamically; hard-refresh the
   browser. Port conflict: set `UL_AUTH_PORT=9099` and restart.
 - **Remote credentials** — stored in the macOS Keychain via `credential.helper=osxkeychain`

@@ -286,15 +286,27 @@ stop_service() {
 
 # 回退启动：在无 GUI 会话上下文的环境（SSH / CI / 自动化工具）里
 # launchd 的 gui/$UID bootstrap 会直接失败（Input/output error），
-# 此时仍需让服务可用 —— 用独立后台进程兜底，而不是谎报成功或直接放弃。
+# 此时仍需让服务可用 —— 用守护化后台进程兜底，而不是谎报成功或直接放弃。
+#
+# ⚠️ 必须走 ensure_service.sh 的双 fork + setsid：直接 nohup 起的进程会随
+# 启动它的会话一起被回收（agent/CI 会话尤其明显），表现为「刚部署完是好的，
+# 过一会儿就 502」。守护化后进程脱离会话，才能长期存活。
 start_standalone() {
-  warn "launchd 注册不可用（当前环境无 GUI 会话上下文），回退为独立后台进程"
-  (
-    cd "$APP_DIR"
-    UL_APP_DIR="$APP_DIR" UL_BACKEND=mysql \
-      nohup /usr/bin/python3 auth_server.py >> "$APP_DIR/auth_server.log" 2>&1 &
-    echo $! > "$PIDFILE"
-  )
+  warn "launchd 注册不可用（当前环境无 GUI 会话上下文），回退为独立守护进程"
+  local ensure="$APP_DIR/scripts/ensure_service.sh"
+  if [ ! -f "$ensure" ]; then
+    warn "未找到 $ensure，退回普通后台启动（进程可能随会话被回收）"
+    (
+      cd "$APP_DIR"
+      UL_APP_DIR="$APP_DIR" UL_BACKEND=mysql \
+        nohup /usr/bin/python3 auth_server.py >> "$APP_DIR/auth_server.log" 2>&1 &
+      echo $! > "$PIDFILE"
+    )
+    sleep 1
+    return 0
+  fi
+  ( cd "$APP_DIR" && UL_APP_DIR="$APP_DIR" UL_BACKEND=mysql bash "$ensure" ) \
+    >> "$APP_DIR/auth_server.log" 2>&1 || true
   sleep 1
 }
 
