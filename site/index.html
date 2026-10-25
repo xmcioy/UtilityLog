@@ -118,6 +118,14 @@ border-radius:14px;padding:6px 14px;font-size:12px;text-decoration:none;transiti
 .modal .msg{font-size:13px;margin-top:10px;padding:8px 12px;border-radius:8px;}
 .modal .msg.ok{background:#dcfce7;color:#166534;}
 .modal .msg.err{background:#fee2e2;color:#991b1b;}
+.modal .msg.warn{background:#fef3c7;color:#92400e;}
+.modal .msg.info{background:#e0f2fe;color:#075985;}
+.u-dup-btn{margin-left:8px;padding:4px 12px;border:1px solid #d1d5db;border-radius:6px;
+  background:#fff;color:#374151;cursor:pointer;font-size:13px;}
+.u-dup-btn:hover{background:#f3f4f6;}
+.u-dup-btn.danger{background:#dc2626;border-color:#dc2626;color:#fff;}
+.u-dup-btn.danger:hover{background:#b91c1c;}
+.u-dup-hint{margin-top:6px;font-size:12px;}
 .modal .draft-meta{background:#f8fafc;border:1px dashed #e2e8f0;border-radius:8px;padding:10px 12px;font-size:12.5px;margin-top:12px;}
 </style>
 </head>
@@ -234,7 +242,7 @@ border-radius:14px;padding:6px 14px;font-size:12px;text-decoration:none;transiti
     </div>
     <p style="font-size:12.5px;color:#6b7280;margin:8px 0 0">
       上传水/电/燃气账单 <b>PDF 或截图</b>（≤20MB），自动识别出草稿，核对后入库。
-      同家庭同月同类型重复保存会覆盖（upsert）。
+      若该家庭当月已有同类型账单，保存前会先询问是覆盖还是合并。
     </p>
     <label for="upFamily">家庭</label>
     <select id="upFamily">
@@ -437,16 +445,49 @@ $("btnDiscardDraft").onclick = () => {
   uDraftState = null;
 };
 
-$("btnSaveBill").onclick = async () => {
+$("btnSaveBill").onclick = () => {
   if (!uDraftState) return;
   let family = $("upFamily").value;
   if (family === "__new__" || !family)
     return uShowMsg($("saveMsg"), "请先选择或新建家庭", "err");
   const payload = Object.assign({family, type: uDraftState.bill_type,
                                  image: uDraftState.image}, uCollectDraft());
+  uSaveBill(payload);
+};
+
+// 保存账单（0.5.3）：首次提交前先探测该家庭当月是否已有同类型账单；
+// 命中则不落库，先让用户选「覆盖保存 / 合并保存 / 取消」，确认后才真正入库。
+async function uSaveBill(payload){
   const btn = $("btnSaveBill");
   btn.disabled = true;
   try{
+    if (!payload.confirm_overwrite){
+      const {data: chk} = await uApi("/api/bills/check", {
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({family:payload.family, month:payload.month,
+                             type:payload.type})
+      });
+      if (chk.ok && chk.exists){
+        const ex = chk.existing || {};
+        const tl = U_TYPE_LABEL[ex.type] || ex.type || "账单";
+        $("saveMsg").innerHTML =
+          `<div class="msg warn">⚠ ${uEsc(ex.family || payload.family)} ` +
+          `${uEsc(ex.month || payload.month || "")} 已有一条${uEsc(tl)}账单` +
+          `（金额 ${uEsc(ex.amount == null ? "未知" : ex.amount)}，` +
+          `用量 ${uEsc(ex.usage == null ? "未知" : ex.usage)}）。请选择：` +
+          `<button type="button" class="u-dup-btn danger" id="dupOverwrite">覆盖保存</button>` +
+          `<button type="button" class="u-dup-btn" id="dupMerge">合并保存</button>` +
+          `<button type="button" class="u-dup-btn" id="dupCancel">取消</button></div>` +
+          `<div class="msg info u-dup-hint">覆盖：整单替换（未填字段清空）；合并：仅更新本次填写的字段，其余保留</div>`;
+        $("dupOverwrite").onclick = () =>
+          uSaveBill(Object.assign({}, payload, {confirm_overwrite:true, replace:true}));
+        $("dupMerge").onclick = () =>
+          uSaveBill(Object.assign({}, payload, {confirm_overwrite:true}));
+        $("dupCancel").onclick = () => { $("saveMsg").innerHTML = ""; };
+        return;
+      }
+    }
     const {data} = await uApi("/api/bills", {
       method:"POST",
       headers:{"Content-Type":"application/json"},

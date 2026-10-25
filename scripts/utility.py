@@ -22,7 +22,7 @@ from pathlib import Path
 
 import db_backend
 
-__version__ = "0.5.2"
+__version__ = "0.5.3"
 
 APP_DIR = db_backend.resolve_app_dir()
 DB_PATH = os.environ.get("UL_DB", str(APP_DIR / "data" / "utility.db"))
@@ -769,6 +769,17 @@ def list_bills(user, family=None, month=None, btype=None):
         where += " AND type=?"
         args.append(btype)
     return query_bills(user, where, args, "month DESC, type, id DESC")
+
+
+def get_existing_bill(family, month, btype, user):
+    """查询该家庭当月该费种是否已有账单（覆盖前确认用），返回记录 dict 或 None。
+
+    0.5.3：网页上传/录入在保存前先探测重复 —— 命中时后端返回 409 +
+    既有记录摘要，由前端请用户确认「覆盖 / 合并 / 取消」后再带
+    confirm_overwrite 重新提交；MCP 通道维持 replace 参数语义不变。
+    """
+    rows = list_bills(user, family=family, month=month, btype=btype)
+    return rows[0] if rows else None
 
 
 def dump_json(user):

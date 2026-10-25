@@ -540,6 +540,14 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._handle_bill_save(user[1])
             return
+        # 保存前探测重复：该家庭当月该费种是否已有账单（0.5.3）
+        if path == "/api/bills/check":
+            user = current_user(self.headers)
+            if not user:
+                self._json_err("未登录", 401)
+                return
+            self._handle_bill_check(user[1])
+            return
 
         # MCP Streamable HTTP 端点（与前端共用 8089 端口，鉴权同 API）
         if path == "/mcp":
@@ -878,8 +886,46 @@ class Handler(BaseHTTPRequestHandler):
 
         self._json({"ok": True, "file": image_rel, "draft": draft})
 
+    def _handle_bill_check(self, username):
+        """探测该家庭当月该费种是否已有账单（0.5.3，供前端保存前确认）"""
+        body = self._read_raw(8192)
+        if body is None:
+            return
+        try:
+            data = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as e:
+            self._json_err(f"JSON 解析失败: {e}", 400)
+            return
+        if not isinstance(data, dict):
+            self._json_err("请求体必须是 JSON 对象", 400)
+            return
+        family = (data.get("family") or "").strip()
+        month = (data.get("month") or "").strip()
+        btype = (data.get("type") or "").strip()
+        if not (family and month and btype):
+            self._json_err("缺少 family / month / type")
+            return
+        import utility as U
+        row = U.get_existing_bill(family, month, btype, username)
+        if row is None:
+            self._json({"ok": True, "exists": False})
+            return
+        self._json({"ok": True, "exists": True, "existing": {
+            "id": row.get("id"), "type": row.get("type"),
+            "family": row.get("family"), "month": row.get("month"),
+            "usage": row.get("usage"), "amount": row.get("amount"),
+            "created_at": str(row.get("created_at") or ""),
+        }})
+
     def _handle_bill_save(self, username):
-        """确认入库：JSON body（add_bill 兼容字段）→ 复用 MCP 工具层校验 + upsert"""
+        """确认入库：JSON body（add_bill 兼容字段）→ 复用 MCP 工具层校验 + upsert
+
+        0.5.3 起不再静默 upsert：保存前先探测该家庭当月该费种是否已有账单，
+        命中且未带 confirm_overwrite 时返回 409 + 既有记录摘要，由前端请用户
+        确认「覆盖 / 合并 / 取消」后再重新提交。覆盖语义：
+          confirm_overwrite + replace=true  → 整单覆盖（未传字段置 NULL）
+          confirm_overwrite（无 replace）   → 合并保存（未传字段保留旧值）
+        """
         body = self._read_raw(256 * 1024)
         if body is None:
             return
@@ -892,6 +938,32 @@ class Handler(BaseHTTPRequestHandler):
             self._json_err("请求体必须是 JSON 对象", 400)
             return
         args.pop("user", None)  # 网页通道一律以已登录用户入库，防冒充
+
+        # 重复探测：命中则先请用户确认，不直接覆盖
+        family = str(args.get("family") or "").strip()
+        month = str(args.get("month") or "").strip()
+        btype = str(args.get("type") or "").strip()
+        if family and month and btype and not args.get("confirm_overwrite"):
+            import utility as U
+            row = U.get_existing_bill(family, month, btype, username)
+            if row is not None:
+                tlabel = {"water": "水费", "electric": "电费", "gas": "燃气费"}.get(
+                    btype, btype)
+                self._json({
+                    "ok": False,
+                    "duplicate": True,
+                    "error": (f"该家庭 {month} 已有一条{tlabel}账单"
+                              f"（金额 {row.get('amount') if row.get('amount') is not None else '未知'}），"
+                              f"请确认是否覆盖"),
+                    "existing": {
+                        "id": row.get("id"), "type": row.get("type"),
+                        "family": row.get("family"), "month": row.get("month"),
+                        "usage": row.get("usage"), "amount": row.get("amount"),
+                        "created_at": str(row.get("created_at") or ""),
+                    },
+                }, 409)
+                return
+        args.pop("confirm_overwrite", None)
 
         mcp_server.set_request_user(username)
         try:

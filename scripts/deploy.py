@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""UtilityLog 跨平台部署工具（0.5.2，纯标准库，macOS / Linux / Windows 通用）
+"""UtilityLog 跨平台部署工具（0.5.3，纯标准库，macOS / Linux / Windows 通用）
 
 为什么再写一个 Python 版：`scripts/deploy.sh` 依赖 bash / rsync / launchd / brew，
 只在 macOS（部分 Linux）可用。本脚本用标准库做同样的事，三平台一致：

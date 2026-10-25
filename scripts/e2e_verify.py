@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-UtilityLog 端到端回归验证（0.5.2）
+UtilityLog 端到端回归验证（0.5.3）
 
 用途：每次 deploy.sh upgrade 之后执行，确认「升级后的程序真的可用」，而不只是端口在听。
 
@@ -157,6 +157,19 @@ class Web:
         except urllib.error.HTTPError as e:
             return e.code, e.read().decode("utf-8", "replace")
 
+    def post_json(self, path, obj, headers=None):
+        """POST JSON body（0.5.3：/api/bills 与 /api/bills/check 都是 JSON 接口）"""
+        h = {"Content-Type": "application/json"}
+        h.update(headers or {})
+        req = urllib.request.Request(BASE + path,
+                                     data=json.dumps(obj).encode("utf-8"),
+                                     headers=h, method="POST")
+        try:
+            r = self.op.open(req, timeout=10)
+            return r.status, r.read().decode("utf-8", "replace")
+        except urllib.error.HTTPError as e:
+            return e.code, e.read().decode("utf-8", "replace")
+
     def get(self, path, headers=None):
         req = urllib.request.Request(BASE + path, headers=headers or {})
         try:
@@ -289,7 +302,7 @@ def run_all():
         res = m.request("initialize", {
             "protocolVersion": "2024-11-05",
             "capabilities": {},
-            "clientInfo": {"name": "e2e_verify", "version": "0.5.2"}})
+            "clientInfo": {"name": "e2e_verify", "version": "0.5.3"}})
         ok = "result" in res and "serverInfo" in res.get("result", {})
         check("MCP initialize 握手", ok, res.get("result", {}).get("serverInfo", {}).get("name", ""))
 
@@ -529,6 +542,54 @@ def run_all():
         code, body = w.post("/api/families/%d/members/remove" % fid_web,
                             {"username": U_B})
         check("网页 API 移除成员 B", code == 200, "code=%s" % code)
+
+    # ---- 0.5.3：重复账单保存前确认（不再静默 upsert）----
+    # 前置：MCP 段已在 FAM/MONTH 录过一笔水费（usage=20, amount=76）
+    print("[e2e] 3.5 重复账单保存前确认", flush=True)
+    code, body = w.post_json("/api/bills/check",
+                             {"family": FAM, "month": MONTH, "type": "water"})
+    cj = json.loads(body) if code == 200 else {}
+    check("POST /api/bills/check 探测到既有账单",
+          code == 200 and cj.get("exists") is True and cj.get("existing", {}).get("amount") == 76.0,
+          "code=%s %s" % (code, body[:120]))
+
+    code, body = w.post_json("/api/bills/check",
+                             {"family": FAM, "month": "2098-12", "type": "water"})
+    cj = json.loads(body) if code == 200 else {}
+    check("无记录时 check 返回 exists=false",
+          code == 200 and cj.get("exists") is False, "code=%s" % code)
+
+    # 未确认就提交 → 必须 409，且旧记录原封不动
+    code, body = w.post_json("/api/bills",
+                             {"family": FAM, "month": MONTH, "type": "water",
+                              "usage": 99.0, "amount": 99.0, "user": U_A})
+    dj = json.loads(body) if body.startswith("{") else {}
+    check("重复保存未确认返回 409 + duplicate 标记",
+          code == 409 and dj.get("duplicate") is True, "code=%s %s" % (code, body[:120]))
+    code, body = w.post_json("/api/bills/check",
+                             {"family": FAM, "month": MONTH, "type": "water"})
+    cj = json.loads(body) if code == 200 else {}
+    not_touched = cj.get("existing", {}).get("usage") == 20.0
+    check("409 拦截后旧记录未被改动", not_touched,
+          "usage=%s" % cj.get("existing", {}).get("usage"))
+
+    # 确认覆盖（replace）→ 整单替换成功
+    code, body = w.post_json("/api/bills",
+                             {"family": FAM, "month": MONTH, "type": "water",
+                              "usage": 24.0, "amount": 80.0,
+                              "water_fee": 50.0, "sewage_fee": 30.0,
+                              "confirm_overwrite": True, "replace": True,
+                              "user": U_A})
+    check("确认覆盖后保存成功", code == 200 and json.loads(body).get("ok") is True,
+          "code=%s %s" % (code, body[:120]))
+    code, body = w.post_json("/api/bills/check",
+                             {"family": FAM, "month": MONTH, "type": "water"})
+    cj = json.loads(body) if code == 200 else {}
+    ex = cj.get("existing", {})
+    check("覆盖后金额与用量已替换", ex.get("usage") == 24.0 and ex.get("amount") == 80.0,
+          "usage=%s amount=%s" % (ex.get("usage"), ex.get("amount")))
+    check("覆盖后 check 仍返回既有记录",
+          cj.get("exists") is True, "")
 
     # 改密码（放最后：改完当前会话失效）
     code, body = w.post("/api/password", {"old": PASS_A, "new": PASS_A2})

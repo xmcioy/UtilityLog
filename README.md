@@ -1,6 +1,6 @@
 # UtilityLog
 
-![Version](https://img.shields.io/badge/version-0.5.2-2563eb) ![License](https://img.shields.io/badge/license-MIT-green) ![Python](https://img.shields.io/badge/Python-3.9%2B-3776ab)
+![Version](https://img.shields.io/badge/version-0.5.3-2563eb) ![License](https://img.shields.io/badge/license-MIT-green) ![Python](https://img.shields.io/badge/Python-3.9%2B-3776ab)
 
 Self-hosted utility bill (water / electricity / gas) tracker for multiple households.
 Three ways to enter bills: **web upload with automatic PDF recognition**, manual entry, or an **AI skill (MCP)** — all into one private database with an ECharts dashboard.

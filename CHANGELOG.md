@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.5.3] - 2026-10-25
+
+### 新增
+- **2026-10-25 10:26 · workbuddy** — 0.5.3 重复账单保存前确认：POST /api/bills/check 探测 + /api/bills 未确认 409 拦截（不再静默 upsert），前端三选「覆盖/合并/取消」；e2e 新增 7 项共 55/55 全绿（文件：scripts/utility.py scripts/mcp_server.py scripts/e2e_verify.py auth_server.py site/index.html scripts/deploy.sh scripts/deploy.py README.md README.zh-CN.md docs/API.md docs/DESIGN.md CHANGELOG.md）
+- **重复账单保存前确认（不再静默覆盖）**：网页上传/录入保存时，若该家庭当月
+  已存在同类型账单，后端返回 409 + 既有记录摘要（金额/用量/入库时间），
+  前端弹出「覆盖保存 / 合并保存 / 取消」三选确认，用户确认后才真正入库
+  —— 覆盖 = `replace` 整单替换（未填字段清空）；合并 = 增量保留（未填字段保留旧值）
+- `POST /api/bills/check`（JSON `{family, month, type}`）：保存前探测该家庭当月
+  该费种是否已有账单，供前端与脚本预检
+- `utility.get_existing_bill(family, month, btype, user)`：重复探测共用查询
+
+### 变更
+- `POST /api/bills` 保存流程前置重复拦截：未带 `confirm_overwrite` 且命中既有
+  记录时一律 409，不再直接 upsert；MCP 通道行为不变（继续用 `replace` 参数）
+
 ## [0.5.2] - 2026-10-25
 
 ### 变更

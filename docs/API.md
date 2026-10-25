@@ -1,6 +1,6 @@
 # UtilityLog API 文档（API.md）
 
-> 版本：0.5.2（2026-10-25）
+> 版本：0.5.3（2026-10-25）
 > 基准实现：`auth_server.py`（认证网关，`ThreadingHTTPServer`，默认监听 `127.0.0.1:8099`）。
 > 本地访问经 nginx `:8089` 反代到 `:8099`；公网经 Cloudflare Tunnel 暴露。
 > 本文档与代码同步维护；路由或参数变更时必须同步更新。
@@ -38,7 +38,8 @@
 | POST | `/mcp` | 必须 | MCP Streamable HTTP 端点（JSON-RPC 2.0）。鉴权同上；推荐 `Authorization: Bearer <API Key>`。与前端共用 nginx `:8089` 端口 |
 | POST | `/api/bills/upload` | 必须 | 上传账单文件（multipart/form-data），自动解析出草稿（**不落库**），见 4.7 |
 | POST | `/api/families` | 必须 | 新建家庭（JSON `{name}`），重复名称返回 400，见 4.9 |
-| POST | `/api/bills` | 必须 | 账单确认入库（JSON，add_bill 兼容字段，upsert），见 4.8；同时服务手工录入 |
+| POST | `/api/bills` | 必须 | 账单确认入库（JSON，add_bill 兼容字段；0.5.3 起重复先 409 确认再覆盖），见 4.8；同时服务手工录入 |
+| POST | `/api/bills/check` | 必须 | 保存前探测该家庭当月该费种是否已有账单（0.5.3），见 4.8b |
 | GET | `/data.js` | 必须 | 按当前登录用户动态导出数据（`window.UTILITY_DATA = {...};`） |
 | GET | `/api/me` | 必须 | 当前登录用户信息 |
 | GET | `/api/tokens` | 必须 | API Key 列表（仅前缀）；**列表为空时自动签发一把并一次性返回明文** |
@@ -277,20 +278,50 @@ curl -s -X POST http://127.0.0.1:8089/mcp \
 ### 4.8 POST /api/bills（0.5.0 确认入库 / 手工录入）
 
 JSON body，字段与 MCP `add_bill` 工具完全兼容（`family`、`month`、`type`、`usage`、
-`amount` 必填，峰谷/分项/档位可选；同家庭同月同类型 upsert 覆盖）。
+`amount` 必填，峰谷/分项/档位可选）。
 入库统一以**当前登录用户**执行（body 里的 `user` 会被忽略，防冒充），
 校验逻辑复用 MCP 工具层（金额不变式由调用方保证）。
 
+**重复确认（0.5.3）**：同家庭同月同类型**不再静默 upsert** —— 保存前先探测，
+命中且 body 未带 `confirm_overwrite: true` 时返回 **409** + 既有记录摘要，
+由前端请用户选择；确认后重新提交：
+
+- `confirm_overwrite: true` + `replace: true` → **覆盖保存**（整单替换，未传字段清 NULL）
+- 仅 `confirm_overwrite: true` → **合并保存**（增量保留，未传字段保留旧值）
+
 ```bash
+# 第一步：保存被拦截（已有记录）
 curl -b cookies.txt -X POST http://127.0.0.1:8089/api/bills \
   -H "Content-Type: application/json" \
   -d '{"family":"我的家","month":"2025-04","type":"electric","usage":14,
        "amount":7.71,"peak_usage":11,"peak_price":0.617,
        "valley_usage":3,"valley_price":0.307,"image":"uploads/xxx.pdf"}'
+# → 409 {"ok":false,"duplicate":true,"error":"该家庭 2025-04 已有一条电费账单（金额 7.71），请确认是否覆盖",
+#        "existing":{"id":1,"type":"electric","family":"我的家","month":"2025-04","usage":14,"amount":7.71,"created_at":"…"}}
+
+# 第二步：用户确认覆盖后重新提交
+curl -b cookies.txt -X POST http://127.0.0.1:8089/api/bills \
+  -H "Content-Type: application/json" \
+  -d '{…同上…, "confirm_overwrite": true, "replace": true}'
 ```
 
 成功：`{"ok": true, "message": "已保存", "bill": {"saved": true, "id": 1, …}}`；
 失败：400 + `{"ok": false, "error": "原因"}`（家庭不存在/无权限/参数缺失等）。
+
+### 4.8b POST /api/bills/check（0.5.3 保存前重复探测）
+
+JSON body `{"family", "month", "type"}`，探测该家庭当月该费种是否已有账单
+（前端在用户点「保存」后、真正提交前自动调用）。
+
+```bash
+curl -b cookies.txt -X POST http://127.0.0.1:8089/api/bills/check \
+  -H "Content-Type: application/json" \
+  -d '{"family":"我的家","month":"2025-04","type":"electric"}'
+```
+
+无记录：`{"ok": true, "exists": false}`；
+有记录：`{"ok": true, "exists": true, "existing": {"id": 1, "type": "electric",
+"family": "我的家", "month": "2025-04", "usage": 14, "amount": 7.71, "created_at": "…"}}`。
 
 ### 4.9 POST /api/families（0.5.2 网页新建家庭）
 
@@ -308,7 +339,8 @@ curl -b cookies.txt -X POST http://127.0.0.1:8089/api/families \
 |---|---|
 | 302 | 登录 / 注册 / 退出成功或失败的跳转（携带 `Location` 与 `Set-Cookie`） |
 | 401 | 未登录访问需鉴权资源（/data.js、/mcp、/api/*、脚本、图片、CSS、JSON） |
-| 404 | 未知路由（POST 非四接口、GET /login 等）、静态文件不存在、路径穿越被拦截、非成员访问成员表 |
+| 404 | 未知路由（POST 非注册接口、GET /login 等）、静态文件不存在、路径穿越被拦截、非成员访问成员表 |
+| 409 | `/api/bills` 重复保存未确认（0.5.3：该家庭当月已有同类型账单且未带 `confirm_overwrite`） |
 | 405 | `GET /mcp`（只支持 POST） |
 | 413 | 请求体超限（/mcp 上限 1MB；/api/bills/upload 上限 20MB） |
 
