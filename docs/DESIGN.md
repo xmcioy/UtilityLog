@@ -95,13 +95,14 @@ UtilityLog 是一个**家庭水电气账单记录与展示系统**：用户把�
 │   └── AI_AGENTS.md       AI 客户端（Codex/WorkBuddy）指令安装说明
 ├── auth_config.example.json  凭据配置模板（真实 auth_config.json 放运行目录）
 ├── db_config.example.json    MySQL 连接配置模板（真实 db_config.json 放运行目录）
-├── README.md              中英文双语说明（含安装部署 / MySQL / nginx / 路线图）
+├── README.md              中英文双语说明（含安装部署 / MySQL / nginx）
 ├── CHANGELOG.md           修订记录
 ├── LICENSE                MIT
 └── .gitignore             排除本地私有数据
 
-> 0.5.2 起安装与部署收敛到 README：此前的 `docs/INSTALL.md`、`docs/KNOWN_ISSUES.md`、
-> `docs/ROADMAP.md` 已分别合并进 README（问题全部修完）或删除，避免内部待办公开可见。
+> 0.5.2 起安装与部署收敛到 README：`docs/INSTALL.md`、`docs/KNOWN_ISSUES.md`、
+> `docs/ROADMAP.md` 三份已删除 —— 问题全部修完、安装并入 README、规划移入本地
+> 协作区（`.agent-sync/PROJECT.md`），内部待办不对外公开。
 
 运行目录 ~/myapp/utilitylog/（不入库）
 ├── data/utility.db        SQLite 数据库（UL_BACKEND=sqlite 时）

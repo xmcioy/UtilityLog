@@ -159,12 +159,6 @@ API Key 在网页「设置」页重置获得。录入契约见 [skill/SKILL.md](
 | [skill/SKILL.md](skill/SKILL.md) | AI 技能录入契约（脱敏模板） |
 | [CHANGELOG.md](CHANGELOG.md) | 版本更新记录 |
 
-## 路线图
-
-近期：更多地区/公司的账单解析模板、识别失败时用户标注的自学习、看板内直接编辑/删除账单、
-附件内嵌预览。中期：账单逾期提醒与月度预算、同比/环比图表、CSV/Excel 导出、移动端体验打磨。
-想法池：多实例数据聚合、本地 OCR、PWA 离线看板、界面国际化。
-
 ## 协议
 
 MIT — 见 [LICENSE](LICENSE)。

@@ -167,14 +167,6 @@ bill tables. Web sync: `python3 scripts/sync_site.py` (the gateway exports
 | [skill/SKILL.md](skill/SKILL.md) | AI skill contract (sanitized template) |
 | [CHANGELOG.md](CHANGELOG.md) | Version history |
 
-## Roadmap
-
-Near term: more bill-parse templates (other regions/companies), parse self-learning
-from user corrections, in-dashboard bill edit/delete, inline PDF/image preview.
-Mid term: due-date reminders and monthly budgets, year-over-year comparison charts,
-CSV/Excel export, mobile polish. Ideas: multi-instance aggregation, local OCR,
-PWA offline dashboard, UI i18n.
-
 ## License
 
 MIT — see [LICENSE](LICENSE).
